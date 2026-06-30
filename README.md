@@ -170,20 +170,41 @@ const startHelper = () => {
 
 ---
 
-## 🔧 打包命令
+## 🔧 打包与构建
 
 ```bash
 # 在 C:\Users\niu\Desktop\插件\ 目录下执行：
 node build.js
 ```
+执行后会将 `src/*.js` 文件打包构建并输出到 `dist/slicejobs.user.js`。
 
-输出到 `dist/slicejobs.user.js`，把这个文件更新到油猴即可。
+---
 
-升级版本号：
-```bash
-# 先修改 src/header.js 中的 @version，然后：
-node build.js
-```
+## ⚙️ 用户安装与更新
+
+1.  在浏览器安装 **Tampermonkey (油猴)** 扩展。
+2.  点击下方链接直接安装或自动更新至最新版本：
+    *   👉 [点击直链安装/更新《爱零工审单数据助手》](https://raw.githubusercontent.com/3169657175/slicejobs-helper/master/dist/slicejobs.user.js)
+    *(点击后油猴会自动拦截并弹出安装/更新确认页面，点击“安装”或“更新”即可)*
+3.  匹配域名：`*://admin2.slicejobs.com/*`
+
+---
+
+## 🚀 开发者版本升级
+
+当您修改完模块后，若需要升级版本：
+1.  先修改 `src/header.js` 中的 `@version`。
+2.  执行构建：
+    ```bash
+    node build.js
+    ```
+3.  提交并推送：
+    ```bash
+    git add .
+    git commit -m "bump: version to x.x.x"
+    git push
+    ```
+    推送成功后，用户的油猴插件会在后台检测并自动更新该脚本！
 
 ---
 
