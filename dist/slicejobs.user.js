@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.7.9
+// @version      3.8.0
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -1787,7 +1787,7 @@
             fd.append('response_format', 'verbose_json');
             fd.append('language', 'zh');
             fd.append('temperature', '0');
-            fd.append('prompt', '这是门店审核录音，只转写真实对话。核心词：脉动、卖动、麦动、1L、一升、大瓶、电解质、库存、整箱、几箱、几件、还有货、多少钱、价格、元、块。不要编造新闻、广告、订阅、故事、外语或无关内容；听不清就留空。');
+            fd.append('prompt', '这是门店审核录音，只转写真实对话。核心词：脉动、卖动、麦动、1L、一升、大瓶、电解质、库存、仓库、整箱、几箱、几件、现货、还有货、多少钱、价格、元、块。请保留中文标点，并按说话停顿分句。不要编造新闻、广告、订阅、故事、外语或无关内容；听不清就留空。');
         }
         return fd;
     }
@@ -2198,9 +2198,17 @@
         return true;
     }
 
-    // 将 AI 识别文本按标点拆分为短句
+    function sttEnsureSentencePunctuation(text) {
+        const clean = String(text || '').replace(/[ \t]+/g, ' ').trim();
+        if (!clean || /[，。？！；;,.!?]$/.test(clean)) return clean;
+        const normalized = sttNormalizeBusinessText(clean);
+        const looksLikeQuestion = /请问|多少|几(?:箱|件|块)|有没有|还有吗|吗|么|呢|怎么卖|什么价|贵不贵/.test(normalized);
+        return clean + (looksLikeQuestion ? '？' : '。');
+    }
+
+    // 将 AI 识别文本按标点拆分为短句；普通空格不是句界，不能据此打碎文本。
     function splitIntoPhrases(text) {
-        const rawParts = text.split(/([，。？！、\s\n；;]+)/);
+        const rawParts = String(text || '').split(/([，。？！、\n；;]+)/);
         const phrases = [];
         for (let i = 0; i < rawParts.length; i += 2) {
             const words = rawParts[i] || '';
@@ -2210,6 +2218,19 @@
                 phrases.push(combined);
             }
         }
+        return phrases;
+    }
+
+    function sttSegmentsToDisplayPhrases(segments) {
+        const phrases = [];
+        (segments || []).forEach(seg => {
+            const parts = splitIntoPhrases(seg && seg.text || '');
+            if (parts.length === 0) return;
+            parts.forEach(part => {
+                const readable = sttEnsureSentencePunctuation(part);
+                if (readable) phrases.push(readable);
+            });
+        });
         return phrases;
     }
 
@@ -2231,31 +2252,13 @@
                     bestIdx = i;
                 }
             }
-            segments[bestIdx] = segments[bestIdx] + segments[bestIdx + 1];
+            const separator = /[，。？！；;,.!?]$/.test(segments[bestIdx]) ? '' : '，';
+            segments[bestIdx] = segments[bestIdx] + separator + segments[bestIdx + 1];
             segments.splice(bestIdx + 1, 1);
         }
 
-        // 数量过少：对长度最长项进行对半拆分，限制最小长度以防字数过少强行换行
-        while (segments.length < N) {
-            let maxIdx = 0;
-            let maxLen = 0;
-            for (let i = 0; i < segments.length; i++) {
-                if (segments[i].length > maxLen) {
-                    maxLen = segments[i].length;
-                    maxIdx = i;
-                }
-            }
-            const targetText = segments[maxIdx];
-            if (targetText.length <= 15) { // 限制切分最小字数为 15 个字符，小于此字数时不再切分，直接插入空段以留白
-                segments.splice(maxIdx + 1, 0, '');
-            } else {
-                const mid = Math.floor(targetText.length / 2);
-                const part1 = targetText.substring(0, mid);
-                const part2 = targetText.substring(mid);
-                segments[maxIdx] = part1;
-                segments.splice(maxIdx + 1, 0, part2);
-            }
-        }
+        // 数量过少时保留模型原始分段，剩余字幕行留空，绝不从句子中间硬切。
+        while (segments.length < N) segments.push('');
         return segments;
     }
 
@@ -2333,9 +2336,8 @@
         }
 
         const N = listItems.length;
-        const fullText = segments.map(s => s.text.trim()).join('');
-
-        const phrases = splitIntoPhrases(fullText);
+        // 保留 API 自带的段落/停顿边界；旧逻辑无分隔 join 后再硬切，导致字幕杂乱且无标点。
+        const phrases = sttSegmentsToDisplayPhrases(segments);
         const aiSegments = adjustSegmentCount(phrases, N);
 
         listItems.forEach((li, idx) => {
@@ -2420,7 +2422,7 @@
 
         const restoredLines = snapshot.length === listItems.length
             ? snapshot.map(seg => String(seg.text || '').trim())
-            : adjustSegmentCount(splitIntoPhrases(snapshot.map(seg => seg.text || '').join('')), listItems.length);
+            : adjustSegmentCount(sttSegmentsToDisplayPhrases(snapshot), listItems.length);
         listItems.forEach((li, idx) => {
             const text = restoredLines[idx] || '';
             const span = li.querySelector('span');
@@ -2554,9 +2556,9 @@
         // 对原生字幕要更宽松：只要有疑似产品词 + 价格/库存词，就先用原生，避免无谓调用 AI。
         const productHits = (compact.match(/脉动|卖动|麦动|麦豆|脉豆|迈动|买动|卖手|电解|电解质|电解字|电解值|电解至|1L|一升|一生|医生|一身|大瓶|六百|600m?l?/gi) || []).length;
         const priceHits = (compact.match(/多少钱|价格|价钱|几块|几块的|几块呀|几块啊|块钱|多少一|\d+(?:\.\d+)?(?:元|块|毛|角)|[一二三四五六七八九十两][块元毛角]/g) || []).length;
-        const stockHits = (compact.match(/库存|库村|库纯|库层|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|箱|库存就是|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/g) || []).length;
+        const stockHits = (compact.match(/库存|仓库|现货|见货|库村|库纯|库层|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|箱|库存就是|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/g) || []).length;
         if (productHits > 0 && (priceHits > 0 || stockHits > 0)) return true;
-        if (/(脉动|卖动|麦动|麦豆|脉豆|迈动|买动).{0,12}(库存|库村|库纯|库层|整箱|几箱|几件|箱)/.test(compact)) return true;
+        if (/(脉动|卖动|麦动|麦豆|脉豆|迈动|买动).{0,20}(库存|仓库|现货|见货|库村|库纯|库层|整箱|几箱|几件|\d+(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|箱)/.test(compact)) return true;
         if (/(脉动|卖动|麦动|迈动|买动).{0,24}(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片)/.test(compact)) return true;
         if (/(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片).{0,24}(脉动|卖动|麦动|迈动|买动)/.test(compact)) return true;
         if (/(电解|电解质|电解字|电解值|电解至|一升|一生|医生|六百).{0,12}(价格|价钱|几块|块|元)/.test(compact)) return true;
@@ -2565,7 +2567,7 @@
         const hasPulse = /脉动/.test(normalized);
         const hasProduct = hasPulse || /电解质|1L|一升|大瓶/.test(normalized);
         const hasPrice = /多少钱|价格|几块|块钱|售价|多少一|\d+(?:\.\d+)?\s*(元|块|毛|角)/.test(normalized);
-        const hasStock = /库存|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/.test(normalized);
+        const hasStock = /库存|仓库|现货|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/.test(normalized);
 
         // 原生字幕必须同时出现产品锚点和业务锚点，避免只凭“多少钱”或“几箱”误判。
         return hasProduct && (hasPrice || hasStock);
@@ -2660,7 +2662,7 @@
         const compact = text.replace(/\s+/g, '');
         if (regex.test(text)) return true;
         const businessNormalized = sttNormalizeBusinessText(text);
-        const businessHits = (businessNormalized.match(/脉动|电解质|1L|库存|整箱|多少钱|价格|价钱|几箱|几件|多少箱|还有货|有没有|元|块/g) || []).length;
+        const businessHits = (businessNormalized.match(/脉动|电解质|1L|库存|仓库|现货|整箱|多少钱|价格|价钱|几箱|几件|多少箱|还有货|有没有|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|元|块/g) || []).length;
         const hasBusinessWord = businessHits > 0;
         const latinMatches = text.match(/[A-Za-z]{2,}/g) || [];
         const latinChars = latinMatches.join('').length;
@@ -2683,7 +2685,7 @@
     // 清理 AI 识别出的文本：去除连续重复句
     function sttCleanText(text) {
         if (!text) return '';
-        const rawParts = text.split(/([，。？！、\s\n；;]+)/);
+        const rawParts = text.split(/([，。？！、\n；;]+)/);
         const phrases = [];
         for (let i = 0; i < rawParts.length; i += 2) {
             const words = rawParts[i] || '';
@@ -2734,6 +2736,8 @@
             [/卖动|麦动|麦豆|脉豆|迈动|脉懂|脉东|脉董|脉冻|脉通|脉同|买动|脉洞|故划通|故划|麦通/g, '脉动'],
             [/电解字|电解值|电解至|电解纸|电解制|电解智|电解子|电解汁|电解植|长烦|长瓶|电解/g, '电解质'],
             [/一\s*[lL]|1\s*[lL]|一升|1升|大瓶子|大瓶的|大平|大品|大屏|大瓶装/g, '1L'],
+            [/一起见货|一其见货|一齐见货/g, '一共几件货'],
+            [/见货|现获/g, '现货'],
             [/库村|库层|库纯|库存在|存货|存库|库有|还有整箱|有整箱|整箱的吗|整箱吗/g, '库存整箱'],
             [/有木有|有么有|有没有货|还有货吗|还有没有货/g, '有没有'],
             [/多钱|几块钱|几块|多少一瓶|多少钱一瓶|售价/g, '多少钱'],
@@ -2748,12 +2752,12 @@
     function sttHasUsefulBusinessSignal(segments) {
         const text = (segments || []).map(s => s.text || '').join('');
         const normalized = sttNormalizeBusinessText(text);
-        const businessHits = (normalized.match(/脉动|电解质|1L|库存|整箱|多少钱|价格|几箱|几件|还有货|元|块/g) || []).length;
+        const businessHits = (normalized.match(/脉动|电解质|1L|库存|仓库|现货|整箱|多少钱|价格|几箱|几件|还有货|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|元|块/g) || []).length;
         const junkHits = (text.match(/新闻|订阅|广告|YouTube|terms|companion|astronom|大阪|中国.*美食|洛杉矶|火灾|投票|pseud|firstly|黄蕉|苏都市|小菜店|食物店|网络订阅|故事|妈妈|爸爸|医生|客户|利益|费用|汽车|药方|计算机|克罗|创业网站|欢迎加入|每个人都能通过|东业务司|蔡工房|迷尿|忠明|记者|黄鹤楼|四绷/g) || []).length;
         const latinChars = ((text.match(/[A-Za-z]{2,}/g) || []).join('')).length;
         const textLen = text.replace(/\s+/g, '').length;
         const hasProduct = /脉动|电解质|1L/.test(normalized);
-        const hasBusinessQuestion = /库存|整箱|多少钱|价格|几箱|几件|还有货|有没有|元|块/.test(normalized);
+        const hasBusinessQuestion = /库存|仓库|现货|整箱|多少钱|价格|几箱|几件|还有货|有没有|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|元|块/.test(normalized);
         // 单独出现“块/元”等普通词不能证明 AI 识别正确，必须同时有产品主题和价格/库存意图。
         if (!hasProduct || !hasBusinessQuestion) return false;
         if (junkHits >= 2) return false;
@@ -2834,7 +2838,7 @@
         const sizeRe = /1L|1升|一升|大瓶/;
         const electrolyteRe = /电解质/;
         const priceRe = /价格|多少钱|几块|块钱|售价|多少一|贵不贵|元一瓶|\d+(?:\.\d+)?\s*(元|块|毛|角)/;
-        const stockRe = /库存|整箱|有整箱|还有整箱|几箱|几件|多少箱|还有没有|有没有货|还有货|还有多少|有多少箱|剩多少|卖完|断货|进货|箱/;
+        const stockRe = /库存|仓库|现货|整箱|有整箱|还有整箱|几箱|几件|多少箱|还有没有|有没有货|还有货|还有多少|有多少箱|剩多少|卖完|断货|进货|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|箱/;
 
         items.forEach((item, idx) => {
             if (sttIsHallucination(item.raw)) return;
@@ -2859,7 +2863,7 @@
             const isBareHowMuchInventory = isInventoryQuestionCurrent && /多少钱|多少/.test(currentNorm) && !hasExplicitPriceCurrent && !hasProductCurrent;
             const priceCandidateCurrent = hasPriceCurrent && !isBareHowMuchInventory;
             const isPriceQuestionCurrent = priceCandidateCurrent && /多少|几块|贵不贵|怎么卖|什么价|问.{0,4}(价格|价钱)|吗|么|呢|？/.test(currentNorm);
-            const isStockQuestionCurrent = hasStockCurrent && /几箱|多少箱|有没有|还有多少|剩多少|有多少|问.{0,4}(库存|箱)|吗|么|呢|？/.test(currentNorm);
+            const isStockQuestionCurrent = hasStockCurrent && /几箱|几件|多少箱|多少件|有没有|还有多少|剩多少|有多少|一共|问.{0,8}(库存|仓库|现货|箱|件)|吗|么|呢|？/.test(currentNorm);
 
             let confidence = '';
             let reason = '';
@@ -3053,7 +3057,7 @@
             if (cleanedText) {
                 cleanedSegs.push({
                     ...seg,
-                    text: cleanedText
+                    text: sttEnsureSentencePunctuation(cleanedText)
                 });
             }
         }
@@ -3220,8 +3224,8 @@
         const highlightedPriceHtml = sttFormatBusinessClues('price', priceClues);
         const highlightedStockHtml = sttFormatBusinessClues('stock', stockClues);
 
-        sttRenderContextTipBox(q10Panel, 'sj-stt-tip-q10', 'AI价格:', highlightedPriceHtml);
-        sttRenderContextTipBox(q15Panel, 'sj-stt-tip-q15', 'AI库存:', highlightedStockHtml);
+        sttRenderContextTipBox(q10Panel, 'sj-stt-tip-q10', '字幕价格:', highlightedPriceHtml);
+        sttRenderContextTipBox(q15Panel, 'sj-stt-tip-q15', '字幕库存:', highlightedStockHtml);
     }
 
     // 清空两个提示面板
