@@ -27,16 +27,7 @@ const location = {
 };
 const document = { querySelector() { return null; } };
 let acquireCount = 0;
-const window = {
-    request: {
-        common(name, payload) {
-            assert.strictEqual(name, 'createAuditTask');
-            assert.strictEqual(payload.projectid, 42);
-            acquireCount += 1;
-            return Promise.resolve({ data: { orderid: 400 } });
-        }
-    }
-};
+const window = { request: { common() { acquireCount += 1; } } };
 const toasts = [];
 
 const api = Function(
@@ -67,7 +58,7 @@ const api = Function(
     assert.strictEqual(location.assigned.at(-1), '/order/review/200');
     assert.strictEqual(api.readSlot().state, 'consuming');
     assert.strictEqual(localStorage.getItem('sj_skip_pending_v1'), null);
-    assert.strictEqual(acquireCount, 0, 'ready slot must avoid another allocation');
+    assert.strictEqual(acquireCount, 0, 'skip must never allocate another order');
 
     localStorage.removeItem('sj_prefetch_single_slot_v2');
     location.pathname = '/order/review/300';
@@ -75,14 +66,19 @@ const api = Function(
         state: 'acquiring', currentOrderId: '300', projectId: '42', createdAt: Date.now()
     }));
 
-    assert.strictEqual(await api.handlePending(), true, 'empty slot should acquire one next order');
-    assert.strictEqual(acquireCount, 1);
-    assert.strictEqual(location.assigned.at(-1), '/order/review/400');
+    assert.strictEqual(await api.handlePending(), false, 'empty slot must not allocate another order');
+    assert.strictEqual(acquireCount, 0);
+    assert.strictEqual(location.assigned.at(-1), '/order/review/200');
     assert.strictEqual(localStorage.getItem('sj_skip_pending_v1'), null);
 
     assert(source.includes("'sj-skip-order-btn'"), 'control panel must include the skip button');
     assert(source.includes('await sjWaitForCancelOccupySuccess'),
         'navigation must wait for confirmed cancellation');
+    const skipStart = source.indexOf('    // 跳过当前订单');
+    assert(!source.slice(skipStart).includes("req.common('createAuditTask'"),
+        'skip workflow must only consume the existing cached order');
+    assert(source.includes("i.el-alert__closebtn.is-customed"),
+        'hidden native cancel-occupancy control must be targeted directly');
 
     console.log('Skip-current-order workflow tests passed');
 })().catch((error) => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.3
+// @version      3.9.4
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2077,7 +2077,6 @@
     const SJ_SKIP_PENDING_KEY = 'sj_skip_pending_v1';
     const SJ_SKIP_PENDING_TTL_MS = 2 * 60 * 1000;
     let sjSkipRunning = false;
-    let sjSkipAcquireRunning = false;
 
     function sjReadSkipPending() {
         const raw = localStorage.getItem(SJ_SKIP_PENDING_KEY);
@@ -2106,13 +2105,18 @@
     }
 
     function sjFindCancelOccupyButton() {
-        return Array.from(document.querySelectorAll('button,.el-button,[role="button"]')).find((element) => {
+        // 该元素位于折叠的工单信息区域内；即使不可见，Vue 的点击处理仍然有效。
+        const nativeCancel = document.querySelector('i.el-alert__closebtn.is-customed');
+        if (nativeCancel && nativeCancel.textContent.replace(/\s+/g, '').includes('取消占有')) {
+            return nativeCancel;
+        }
+        return Array.from(document.querySelectorAll('button,.el-button,[role="button"],i')).find((element) => {
             if (element.id === 'sj-skip-order-btn') return false;
-            return element.textContent.replace(/\s+/g, '').includes('取消占有') && sjSkipIsVisible(element);
+            return element.textContent.replace(/\s+/g, '').includes('取消占有');
         }) || null;
     }
 
-    async function sjConfirmCancelOccupyDialog(timeoutMs = 3000) {
+    async function sjConfirmCancelOccupyDialog(timeoutMs = 800) {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
             const wrappers = Array.from(document.querySelectorAll('.el-message-box__wrapper,.el-dialog__wrapper'));
@@ -2171,7 +2175,7 @@
 
     async function sjHandlePendingSkipNavigation() {
         const pending = sjReadSkipPending();
-        if (!pending || sjSkipAcquireRunning) return false;
+        if (!pending) return false;
 
         const currentOrderId = sjGetCurrentOrderId();
         if (pending.state === 'releasing' && currentOrderId === String(pending.currentOrderId)) {
@@ -2182,42 +2186,12 @@
             return true;
         }
 
-        if (sjConsumeReadySlotForSkip(pending.currentOrderId)) return true;
-        if (!pending.projectId) {
+        if (!sjConsumeReadySlotForSkip(pending.currentOrderId)) {
             localStorage.removeItem(SJ_SKIP_PENDING_KEY);
-            autoReviewToast('当前订单已释放，但未读取到项目编号，请在项目列表手动点击“开始审单”。', true);
-            location.assign('/customer/project-order-review/table?customerid=285');
+            autoReviewToast('当前订单已释放，但缓存的下一单不存在，请手动进入下一单。', true);
             return false;
         }
-
-        const req = typeof unsafeWindow !== 'undefined' && unsafeWindow.request || window.request;
-        if (!req || typeof req.common !== 'function') {
-            if (!location.pathname.includes('/customer/project-order-review/table')) {
-                location.assign('/customer/project-order-review/table?customerid=285');
-            }
-            return false;
-        }
-
-        sjSkipAcquireRunning = true;
-        sjWriteSkipPending({ ...pending, state: 'acquiring' });
-        try {
-            const response = await req.common('createAuditTask', { projectid: Number(pending.projectId) });
-            const nextOrderId = sjExtractPrefetchedOrderId(response);
-            if (!nextOrderId) throw new Error('开始审单请求没有返回订单号');
-            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
-            autoReviewToast(`当前订单已释放，正在进入新订单 ${nextOrderId}...`);
-            location.assign('/order/review/' + nextOrderId);
-            return true;
-        } catch (error) {
-            console.error('[Skip] 获取下一单失败:', error);
-            sjWriteSkipPending({ ...pending, state: 'acquiring' });
-            if (!location.pathname.includes('/customer/project-order-review/table')) {
-                location.assign('/customer/project-order-review/table?customerid=285');
-            }
-            return false;
-        } finally {
-            sjSkipAcquireRunning = false;
-        }
+        return true;
     }
 
     async function sjSkipCurrentOrder(button) {
@@ -2230,13 +2204,8 @@
         }
 
         const existingSlot = sjReadPrefetchSlot();
-        if (existingSlot && existingSlot.state !== 'ready') {
-            autoReviewToast('已有订单正在切换，请稍后再试。', true);
-            return;
-        }
-        const projectId = sjGetActiveProjectId();
-        if (!existingSlot && !projectId) {
-            autoReviewToast('尚未读取到项目编号，请等待页面加载完成后再跳过。', true);
+        if (!existingSlot || existingSlot.state !== 'ready') {
+            autoReviewToast('下一单尚未缓存完成，请稍等后再跳过。', true);
             return;
         }
         if (!window.confirm('确定跳过当前订单吗？插件会先取消占有，再进入下一单。')) return;
@@ -2249,7 +2218,6 @@
         const pending = {
             state: 'releasing',
             currentOrderId,
-            projectId: projectId ? String(projectId) : null,
             createdAt: Date.now()
         };
         sjWriteSkipPending(pending);
