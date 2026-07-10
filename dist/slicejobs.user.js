@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.7.8
+// @version      3.7.9
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2789,6 +2789,32 @@
         }).filter(item => item.raw);
     }
 
+    function sttIsLikelyBusinessAnswer(kind, item) {
+        if (!item || !item.raw || sttIsHallucination(item.raw)) return false;
+        const normalized = item.normalized || sttNormalizeBusinessText(item.raw);
+        const compact = normalized.replace(/[，。？！、\s\n；;,.!?]+/g, '');
+        if (compact.length < 1) return false;
+
+        if (/不知道|不清楚|不晓得|没问|没数|没盘|没看|记不清|说不准|忘了|没说/.test(normalized)) return true;
+        if (kind === 'price') {
+            return /\d+(?:\.\d+)?\s*(?:元|块|毛|角)|[一二三四五六七八九十百两半]+(?:元|块|毛|角)|(?:卖|售价|价格|价钱|一瓶|一件).{0,8}\d/.test(normalized);
+        }
+        return /\d+(?:\.\d+)?\s*(?:箱|件|瓶|提)|[一二三四五六七八九十百两半]+(?:箱|件|瓶|提)|有货|有的|还有|还有些|没有|没货|没了|卖完|断货|缺货|零箱|一箱都没/.test(normalized);
+    }
+
+    function sttCollectFollowingAnswers(kind, items, questionIndex) {
+        const question = items[questionIndex];
+        if (!question) return [];
+        const answers = [];
+        // 只检查同一录音紧随问题的两句，避免把下一段录音或远处无关数字拼进来。
+        for (let offset = 1; offset <= 2; offset++) {
+            const candidate = items[questionIndex + offset];
+            if (!candidate || candidate.audioUrl !== question.audioUrl) break;
+            if (sttIsLikelyBusinessAnswer(kind, candidate)) answers.push(candidate);
+        }
+        return answers;
+    }
+
     function sttBuildBusinessClues(kind) {
         const items = [];
         for (const audioUrl in sttCurrentOrderTranscripts) {
@@ -2814,7 +2840,7 @@
             if (sttIsHallucination(item.raw)) return;
             const prev = items[idx - 1];
             const next = items[idx + 1];
-            const context = [prev, item, next].filter(Boolean);
+            const context = [prev, item, next].filter(x => x && x.audioUrl === item.audioUrl);
             const contextNorm = context.map(x => x.normalized).join(' ');
             const currentNorm = item.normalized;
             const compact = currentNorm.replace(/[，。？！、\s\n；;,.!?]+/g, '');
@@ -2832,6 +2858,8 @@
             const isInventoryQuestionCurrent = /(库存|整箱|还有|剩|几箱|多少箱|有没有货|有整箱)/.test(currentNorm);
             const isBareHowMuchInventory = isInventoryQuestionCurrent && /多少钱|多少/.test(currentNorm) && !hasExplicitPriceCurrent && !hasProductCurrent;
             const priceCandidateCurrent = hasPriceCurrent && !isBareHowMuchInventory;
+            const isPriceQuestionCurrent = priceCandidateCurrent && /多少|几块|贵不贵|怎么卖|什么价|问.{0,4}(价格|价钱)|吗|么|呢|？/.test(currentNorm);
+            const isStockQuestionCurrent = hasStockCurrent && /几箱|多少箱|有没有|还有多少|剩多少|有多少|问.{0,4}(库存|箱)|吗|么|呢|？/.test(currentNorm);
 
             let confidence = '';
             let reason = '';
@@ -2864,6 +2892,8 @@
             if (seen.has(key)) return;
             seen.add(key);
 
+            const isQuestion = kind === 'price' ? isPriceQuestionCurrent : isStockQuestionCurrent;
+            const answers = isQuestion ? sttCollectFollowingAnswers(kind, items, idx) : [];
             clues.push({
                 confidence,
                 reason,
@@ -2874,6 +2904,12 @@
                 raw: item.raw,
                 normalized: currentNorm,
                 context: context.map(x => x.raw),
+                answers: answers.map(answer => ({
+                    raw: answer.raw,
+                    normalized: answer.normalized,
+                    start: answer.start,
+                    end: answer.end
+                })),
                 audioUrl: item.audioUrl
             });
         });
@@ -2896,9 +2932,16 @@
                 `原句：${clue.raw}`,
                 normalizedText ? `归一化：${clue.normalized}` : '',
                 `原因：${clue.reason}`,
-                clue.context.length > 1 ? `上下文：${clue.context.join(' / ')}` : ''
+                clue.context.length > 1 ? `上下文：${clue.context.join(' / ')}` : '',
+                clue.answers && clue.answers.length ? `后续回答：${clue.answers.map(x => x.raw).join(' / ')}` : ''
             ].filter(Boolean).join('\n');
-            const lineText = sttEscapeHtml((clue.normalized || clue.raw).replace(/\s+/g, ' '));
+            const questionText = sttEscapeHtml((clue.normalized || clue.raw).replace(/\s+/g, ' '));
+            const answerText = clue.answers && clue.answers.length
+                ? clue.answers.map(answer => sttEscapeHtml((answer.normalized || answer.raw).replace(/\s+/g, ' '))).join(' / ')
+                : '';
+            const lineText = answerText
+                ? `<span style="color:#64748b;font-weight:600;">问：</span>${questionText}<span style="color:#64748b;font-weight:600;margin-left:6px;">答：</span>${answerText}`
+                : questionText;
             const canSeek = clue.hasReliableTime || clue.hasEstimatedTime;
             const timeTitle = clue.hasEstimatedTime ? '按整段文本和音频时长估算的位置，可用于粗略跳转' : '跳到该字幕附近播放';
             const timeLabel = clue.hasEstimatedTime ? `约${sttFormatTime(clue.start)}` : sttFormatTime(clue.start);
@@ -2906,9 +2949,9 @@
                 ? `<button class="sj-stt-seek-btn" title="${timeTitle}" data-time="${Math.max(0, clue.start - 2).toFixed(1)}" data-audio="${sttEscapeHtml(clue.audioUrl || '')}" style="background:rgba(15,23,42,0.08);border:1px solid rgba(15,23,42,0.12);border-radius:3px;color:#475569;font-size:10px;padding:0 4px;cursor:pointer;white-space:nowrap;line-height:16px;">${timeLabel}</button>`
                 : `<span title="该线索来自无逐句时间戳的文本，无法精确跳转" style="background:rgba(15,23,42,0.05);border:1px solid rgba(15,23,42,0.08);border-radius:3px;color:#94a3b8;font-size:10px;padding:0 4px;white-space:nowrap;line-height:16px;">无时间</span>`;
             return `
-                <div class="sj-stt-clue-card" title="${sttEscapeHtml(title)}" style="display:flex;align-items:center;gap:5px;background:${bg};border-left:2px solid ${color};border-radius:3px;padding:2px 5px;margin-top:2px;min-height:18px;max-width:100%;">
-                    <span style="color:${color};font-weight:700;white-space:nowrap;font-size:10.5px;">${clue.confidence}</span>
-                    <span style="color:#475569;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${lineText}</span>
+                <div class="sj-stt-clue-card" title="${sttEscapeHtml(title)}" style="display:flex;align-items:flex-start;gap:5px;background:${bg};border-left:2px solid ${color};border-radius:3px;padding:3px 5px;margin-top:2px;min-height:18px;max-width:100%;">
+                    <span style="color:${color};font-weight:700;white-space:nowrap;font-size:10.5px;line-height:18px;">${clue.confidence}</span>
+                    <span style="color:#475569;flex:1;white-space:normal;overflow-wrap:anywhere;line-height:18px;">${lineText}</span>
                     ${timeButton}
                 </div>
             `;
