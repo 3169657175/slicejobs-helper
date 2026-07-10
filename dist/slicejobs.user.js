@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.7.7
+// @version      3.7.8
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2037,6 +2037,7 @@
     }
 
     function sttRenderNativeReuse(bar, dialogBody, segments, audio) {
+        sttRestoreNativeSubtitles(audio, segments);
         bar.innerHTML = `
             <div style="display:flex; align-items:center; gap:12px; flex:1;">
                 <span style="color:#3fb950; font-weight:bold; white-space:nowrap;">原生字幕已命中业务词，未调用AI</span>
@@ -2259,6 +2260,7 @@
     }
 
     let sttObserver = null;
+    const sttNativeSubtitleSnapshots = new Map();
 
     function sttAudioKey(src) {
         try {
@@ -2323,6 +2325,13 @@
         const sourceKey = sttAudioKey(sourceSrc);
         if (sourceKey && sttCurrentDialogAudioKey() && sttCurrentDialogAudioKey() !== sourceKey) return false;
 
+        const targetUl = document.querySelector('.audio-player-lyric ul');
+        if (sourceKey && targetUl && targetUl.dataset.sjSttMode !== 'ai') {
+            const currentAudio = document.querySelector('.el-dialog audio, .el-dialog__wrapper audio');
+            const nativeSnapshot = sttGetNativeSubtitleSegments(currentAudio);
+            if (nativeSnapshot.length > 0) sttNativeSubtitleSnapshots.set(sourceKey, nativeSnapshot);
+        }
+
         const N = listItems.length;
         const fullText = segments.map(s => s.text.trim()).join('');
 
@@ -2338,7 +2347,6 @@
             }
         });
 
-        const targetUl = document.querySelector('.audio-player-lyric ul');
         if (targetUl) {
             targetUl.dataset.sjSttSource = sourceKey;
             targetUl.dataset.sjSttMode = 'ai';
@@ -2350,6 +2358,9 @@
     function sttGetNativeSubtitleSegments(audio) {
         const currentKey = sttAudioKey(audio && audio.src);
         const targetUl = document.querySelector('.audio-player-lyric ul');
+        if (targetUl && targetUl.dataset.sjSttMode === 'ai') {
+            return sttNativeSubtitleSnapshots.get(currentKey) || [];
+        }
         if (targetUl && targetUl.dataset.sjSttSource) {
             const sourceKey = targetUl.dataset.sjSttSource || '';
             if (sourceKey && currentKey && sourceKey !== currentKey) return [];
@@ -2392,6 +2403,33 @@
         });
 
         return segments;
+    }
+
+    function sttRestoreNativeSubtitles(audio, fallbackSegments) {
+        const currentKey = sttAudioKey(audio && audio.src);
+        const targetUl = document.querySelector('.audio-player-lyric ul');
+        const listItems = Array.from(document.querySelectorAll('.audio-player-lyric ul li'));
+        if (!targetUl || listItems.length === 0) return false;
+
+        const snapshot = sttNativeSubtitleSnapshots.get(currentKey) || fallbackSegments || [];
+        if (!snapshot.length) return false;
+        if (sttObserver) {
+            sttObserver.disconnect();
+            sttObserver = null;
+        }
+
+        const restoredLines = snapshot.length === listItems.length
+            ? snapshot.map(seg => String(seg.text || '').trim())
+            : adjustSegmentCount(splitIntoPhrases(snapshot.map(seg => seg.text || '').join('')), listItems.length);
+        listItems.forEach((li, idx) => {
+            const text = restoredLines[idx] || '';
+            const span = li.querySelector('span');
+            li.style.display = text ? '' : 'none';
+            if (span) span.textContent = text;
+        });
+        delete targetUl.dataset.sjSttSource;
+        delete targetUl.dataset.sjSttMode;
+        return true;
     }
 
     // 深度搜索 Vue 组件树和 Vuex 状态库，抓取已下载的原生字幕数据（无需弹窗/播放器加载到 DOM）
@@ -2514,11 +2552,11 @@
 
         // 原生字幕经常把业务词识别成谐音/错字：脉动->卖动/麦动/卖手，1L->一生/医生，600ml->六百。
         // 对原生字幕要更宽松：只要有疑似产品词 + 价格/库存词，就先用原生，避免无谓调用 AI。
-        const productHits = (compact.match(/脉动|卖动|麦动|迈动|买动|卖手|电解|电解质|电解字|电解值|电解至|1L|一升|一生|医生|一身|大瓶|六百|600m?l?/gi) || []).length;
+        const productHits = (compact.match(/脉动|卖动|麦动|麦豆|脉豆|迈动|买动|卖手|电解|电解质|电解字|电解值|电解至|1L|一升|一生|医生|一身|大瓶|六百|600m?l?/gi) || []).length;
         const priceHits = (compact.match(/多少钱|价格|价钱|几块|几块的|几块呀|几块啊|块钱|多少一|\d+(?:\.\d+)?(?:元|块|毛|角)|[一二三四五六七八九十两][块元毛角]/g) || []).length;
-        const stockHits = (compact.match(/库存|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|箱|库存就是|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/g) || []).length;
+        const stockHits = (compact.match(/库存|库村|库纯|库层|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|箱|库存就是|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/g) || []).length;
         if (productHits > 0 && (priceHits > 0 || stockHits > 0)) return true;
-        if (/(脉动|卖动|麦动|迈动|买动).{0,12}(库存|整箱|几箱|几件|箱)/.test(compact)) return true;
+        if (/(脉动|卖动|麦动|麦豆|脉豆|迈动|买动).{0,12}(库存|库村|库纯|库层|整箱|几箱|几件|箱)/.test(compact)) return true;
         if (/(脉动|卖动|麦动|迈动|买动).{0,24}(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片)/.test(compact)) return true;
         if (/(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片).{0,24}(脉动|卖动|麦动|迈动|买动)/.test(compact)) return true;
         if (/(电解|电解质|电解字|电解值|电解至|一升|一生|医生|六百).{0,12}(价格|价钱|几块|块|元)/.test(compact)) return true;
@@ -2577,9 +2615,8 @@
         return false;
     }
 
-    function sttTryUseNativeSubtitlesByUrl(url, reason) {
-        if (!url) return false;
-        const httpsUrl = url.replace(/^http:\/\//i, 'https://');
+    function sttGetNativeSubtitleSegmentsByUrl(url) {
+        if (!url) return [];
         let nativeSegs = [];
         const audio = document.querySelector('.el-dialog audio, .el-dialog__wrapper audio');
         if (audio && sttAudioKey(audio.src) === sttAudioKey(url)) {
@@ -2588,6 +2625,13 @@
         if (!nativeSegs || nativeSegs.length === 0) {
             nativeSegs = sttFindNativeSubtitlesInVue(url);
         }
+        return nativeSegs || [];
+    }
+
+    function sttTryUseNativeSubtitlesByUrl(url, reason) {
+        if (!url) return false;
+        const httpsUrl = url.replace(/^http:\/\//i, 'https://');
+        const nativeSegs = sttGetNativeSubtitleSegmentsByUrl(url);
         if (nativeSegs && nativeSegs.length > 0 && sttNativeHasUsefulBusinessSignal(nativeSegs)) {
             console.log(`[STT AutoScan] Using native subtitles (${reason || 'matched'}), skipping AI API:`, url);
             sttWriteCache(httpsUrl, nativeSegs);
@@ -2687,10 +2731,10 @@
     function sttNormalizeBusinessText(text) {
         let t = String(text || '');
         const rules = [
-            [/卖动|麦动|迈动|脉懂|脉东|脉董|脉冻|脉通|脉同|买动|脉洞|故划通|故划|麦通/g, '脉动'],
+            [/卖动|麦动|麦豆|脉豆|迈动|脉懂|脉东|脉董|脉冻|脉通|脉同|买动|脉洞|故划通|故划|麦通/g, '脉动'],
             [/电解字|电解值|电解至|电解纸|电解制|电解智|电解子|电解汁|电解植|长烦|长瓶|电解/g, '电解质'],
             [/一\s*[lL]|1\s*[lL]|一升|1升|大瓶子|大瓶的|大平|大品|大屏|大瓶装/g, '1L'],
-            [/库层|库纯|库存在|存货|存库|库有|还有整箱|有整箱|整箱的吗|整箱吗/g, '库存整箱'],
+            [/库村|库层|库纯|库存在|存货|存库|库有|还有整箱|有整箱|整箱的吗|整箱吗/g, '库存整箱'],
             [/有木有|有么有|有没有货|还有货吗|还有没有货/g, '有没有'],
             [/多钱|几块钱|几块|多少一瓶|多少钱一瓶|售价/g, '多少钱'],
             [/那洒|那啥|那个啥/g, '那个']
@@ -2708,6 +2752,10 @@
         const junkHits = (text.match(/新闻|订阅|广告|YouTube|terms|companion|astronom|大阪|中国.*美食|洛杉矶|火灾|投票|pseud|firstly|黄蕉|苏都市|小菜店|食物店|网络订阅|故事|妈妈|爸爸|医生|客户|利益|费用|汽车|药方|计算机|克罗|创业网站|欢迎加入|每个人都能通过|东业务司|蔡工房|迷尿|忠明|记者|黄鹤楼|四绷/g) || []).length;
         const latinChars = ((text.match(/[A-Za-z]{2,}/g) || []).join('')).length;
         const textLen = text.replace(/\s+/g, '').length;
+        const hasProduct = /脉动|电解质|1L/.test(normalized);
+        const hasBusinessQuestion = /库存|整箱|多少钱|价格|几箱|几件|还有货|有没有|元|块/.test(normalized);
+        // 单独出现“块/元”等普通词不能证明 AI 识别正确，必须同时有产品主题和价格/库存意图。
+        if (!hasProduct || !hasBusinessQuestion) return false;
         if (junkHits >= 2) return false;
         if (latinChars >= 20) return false;
         if (textLen > 120 && businessHits === 0) return false;
@@ -2975,6 +3023,17 @@
 
         const bar = sttGetStatusBar(dialogBody);
 
+        if (!forceAi && !sttIsAiEnabled()) {
+            if (await sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, 'ai-disabled-lenient')) return;
+            sttRenderAiDisabled(bar, audio, dialogBody);
+            return;
+        }
+
+        if (!forceAi) {
+            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
+        }
+
+        // 原生字幕必须先于历史 AI 缓存判断，避免旧的错误 AI 字幕抢先覆盖页面字幕。
         const cached = (!forceAi && !sttIsAiEnabled()) ? null : sttReadCache(src);
         if (cached) {
             if (sttHasUsefulBusinessSignal(cached)) {
@@ -2984,16 +3043,6 @@
             }
             sessionStorage.removeItem(STT_CACHE_PREFIX + src);
             console.warn('[STT] Cached transcript looks unreliable, clearing and retrying:', src);
-        }
-
-        if (!forceAi && !sttIsAiEnabled()) {
-            if (await sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, 'ai-disabled-lenient')) return;
-            sttRenderAiDisabled(bar, audio, dialogBody);
-            return;
-        }
-
-        if (!forceAi) {
-            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
         }
 
         if (!sttHasAnyProviderKey()) { sttRenderKeyPrompt(bar, audio, dialogBody); return; }
@@ -3245,6 +3294,15 @@
         if (!url) return;
 
         const httpsUrl = url.replace(/^http:\/\//i, 'https://');
+        // 后台只有在确实拿到原生字幕后才有资格判断是否需要 AI。
+        // 如果字幕尚未加载（常见于录音弹窗还没打开），就延后到前台 sttProcess，不能把“没抓到”当成“没关键词”。
+        if (await sttWaitAndUseNativeSubtitlesByUrl(url, 'before-background-ai')) return;
+        const availableNativeSegs = sttGetNativeSubtitleSegmentsByUrl(url);
+        if (!availableNativeSegs || availableNativeSegs.length === 0) {
+            console.log('[STT AutoScan] Native subtitles are not available yet; deferring AI until the audio dialog is opened:', url);
+            return;
+        }
+
         const cached = sttReadCache(httpsUrl) || sttReadCache(url);
         if (cached) {
             if (sttHasUsefulBusinessSignal(cached)) {
@@ -3256,8 +3314,6 @@
                 sessionStorage.removeItem(STT_CACHE_PREFIX + url);
             }
         }
-
-        if (await sttWaitAndUseNativeSubtitlesByUrl(url, 'before-background-ai')) return;
 
         if (!sttIsAiEnabled()) return;
         if (!sttHasAnyProviderKey()) return;
