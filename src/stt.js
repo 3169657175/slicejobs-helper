@@ -880,6 +880,15 @@
         return false;
     }
 
+    async function sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, reason, timeoutMs = 2500) {
+        const start = Date.now();
+        while (Date.now() - start <= timeoutMs) {
+            if (sttTryUseNativeSubtitlesFallback(audio, dialogBody, bar, reason)) return true;
+            await autoReviewSleep(120);
+        }
+        return false;
+    }
+
     function sttTryUseNativeSubtitlesByUrl(url, reason) {
         if (!url) return false;
         const httpsUrl = url.replace(/^http:\/\//i, 'https://');
@@ -1289,13 +1298,14 @@
             console.warn('[STT] Cached transcript looks unreliable, clearing and retrying:', src);
         }
 
-        if (!forceAi) {
-            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
-        }
-
         if (!forceAi && !sttIsAiEnabled()) {
+            if (await sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, 'ai-disabled-lenient')) return;
             sttRenderAiDisabled(bar, audio, dialogBody);
             return;
+        }
+
+        if (!forceAi) {
+            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
         }
 
         if (!sttHasAnyProviderKey()) { sttRenderKeyPrompt(bar, audio, dialogBody); return; }

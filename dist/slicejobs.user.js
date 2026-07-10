@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.7.4
+// @version      3.7.5
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2559,6 +2559,15 @@
         return false;
     }
 
+    async function sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, reason, timeoutMs = 2500) {
+        const start = Date.now();
+        while (Date.now() - start <= timeoutMs) {
+            if (sttTryUseNativeSubtitlesFallback(audio, dialogBody, bar, reason)) return true;
+            await autoReviewSleep(120);
+        }
+        return false;
+    }
+
     function sttTryUseNativeSubtitlesByUrl(url, reason) {
         if (!url) return false;
         const httpsUrl = url.replace(/^http:\/\//i, 'https://');
@@ -2968,13 +2977,14 @@
             console.warn('[STT] Cached transcript looks unreliable, clearing and retrying:', src);
         }
 
-        if (!forceAi) {
-            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
-        }
-
         if (!forceAi && !sttIsAiEnabled()) {
+            if (await sttWaitAndUseNativeSubtitlesLenient(audio, dialogBody, bar, 'ai-disabled-lenient')) return;
             sttRenderAiDisabled(bar, audio, dialogBody);
             return;
+        }
+
+        if (!forceAi) {
+            if (await sttWaitAndUseNativeSubtitles(audio, dialogBody, bar, 'before-ai')) return;
         }
 
         if (!sttHasAnyProviderKey()) { sttRenderKeyPrompt(bar, audio, dialogBody); return; }
