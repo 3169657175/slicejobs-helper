@@ -2,8 +2,7 @@
     'use strict';
 
     // ============================================================
-    // 网络拦截器：监听 XHR / fetch 响应，自动捕获音频 URL（v3.8）
-    // 必须在所有 STT 函数之前运行，在 Vue 发起 API 请求时即时捕获
+    // 网络拦截器：捕获音频 URL，并在已授权的一键审核提交成功后通知单槽跳转。
     // ============================================================
     (function installAudioInterceptor() {
         const AUDIO_CDN_RE = /https?:\/\/sjaudiopub\.slicejobs\.com\/[^"'\s\\<>\]]+/g;
@@ -31,7 +30,22 @@
             if (matches) matches.forEach(onAudioUrlFound);
         }
 
-        // 拦截 XMLHttpRequest
+        function isAuditSubmitRequest(url, method) {
+            if (String(method || '').toUpperCase() !== 'POST') return false;
+            const value = String(url || '');
+            return (value.includes('/admin/order/audit/') || value.includes('/admin/audit_task/')) &&
+                !['/acquire', '/create', '/get', '/detail', '/history', '/info', '/query']
+                    .some((part) => value.includes(part));
+        }
+
+        function notifyAuditSubmit(meta) {
+            setTimeout(() => {
+                if (typeof sjHandleAuditSubmitResponse === 'function') {
+                    sjHandleAuditSubmitResponse(meta);
+                }
+            }, 0);
+        }
+
         const origOpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
             this._sjUrl = url;
@@ -41,73 +55,36 @@
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
-                const url = this._sjUrl || '';
-                const method = this._sjMethod || 'POST';
-                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
-                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
-                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
-                                      !url.includes('/query');
-                if (this.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
-                    let isSuccess = true;
-                    try {
-                        const resObj = JSON.parse(this.responseText);
-                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                            isSuccess = false;
-                        }
-                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                            isSuccess = false;
-                        }
-                    } catch (e) {}
-                    if (isSuccess) {
-                        console.log('[Prefetch] 拦截到 XHR 审核成功提交，触发极速跳转:', url);
-                        if (typeof sjTriggerPrefetchJump === 'function') {
-                            sjTriggerPrefetchJump();
-                        }
-                    }
+                const responseText = typeof this.responseText === 'string' ? this.responseText : '';
+                scanText(responseText);
+                if (isAuditSubmitRequest(this._sjUrl, this._sjMethod)) {
+                    notifyAuditSubmit({
+                        url: this._sjUrl,
+                        status: this.status,
+                        responseText
+                    });
                 }
-                scanText(this.responseText);
             });
             return origSend.call(this, ...args);
         };
 
-        // 拦截 fetch
         const origFetch = window.fetch;
         if (origFetch) {
-            window.fetch = async function(input, initOptions, ...args) {
-                const url = typeof input === 'string' ? input : (input && input.url || '');
-                const method = initOptions && initOptions.method || 'GET';
-                const response = await origFetch.call(this, input, initOptions, ...args);
-                
-                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
-                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
-                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
-                                      !url.includes('/query');
-                if (response.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
-                    let isSuccess = true;
+            window.fetch = function(input, initOptions, ...args) {
+                const url = typeof input === 'string' ? input : input && input.url || '';
+                const method = initOptions && initOptions.method || input && input.method || 'GET';
+                return origFetch.call(this, input, initOptions, ...args).then((response) => {
                     try {
-                        const clone = response.clone();
-                        const text = await clone.text();
-                        const resObj = JSON.parse(text);
-                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                            isSuccess = false;
-                        }
-                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                            isSuccess = false;
-                        }
-                    } catch (e) {}
-                    if (isSuccess) {
-                        console.log('[Prefetch] 拦截到 fetch 审核成功提交，触发极速跳转:', url);
-                        if (typeof sjTriggerPrefetchJump === 'function') {
-                            sjTriggerPrefetchJump();
-                        }
-                    }
-                }
-
-                try {
-                    const clone = response.clone();
-                    clone.text().then(scanText).catch(() => {});
-                } catch {}
-                return response;
+                        response.clone().text().then((text) => {
+                            scanText(text);
+                            if (isAuditSubmitRequest(url, method)) {
+                                notifyAuditSubmit({ url, status: response.status, responseText: text });
+                            }
+                        }).catch(() => {});
+                    } catch (error) {}
+                    // 立即把响应交还网站，避免插件阻塞网站自己的审核状态更新。
+                    return response;
+                });
             };
         }
     })();

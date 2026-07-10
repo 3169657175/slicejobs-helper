@@ -1950,19 +1950,20 @@
             // 自动折叠非必须审核的题目卡片
             autoReviewCollapseUnneeded();
 
-            // 预取下一单 ID 逻辑 (v3.9)
+            // 单槽预取：进入新订单后清空已消费槽，再补充且只补充一单。
             const match = location.pathname.match(/\/order\/review\/(\d+)/);
             if (match) {
                 const currentOrderId = match[1];
+                sjFinalizePrefetchSlotForCurrentOrder(currentOrderId);
                 const projectId = sjGetActiveProjectId();
                 if (projectId) {
                     sjPrefetchNextOrder(currentOrderId, projectId);
                 }
             }
 
-            // 兜底检测成功弹窗，如果发现有预分配单号，立刻触发极速跳转
+            // 网络拦截未命中时，以网站成功弹窗兜底。
             if (typeof autoReviewGetVisibleSuccessDialog === 'function' && autoReviewGetVisibleSuccessDialog()) {
-                sjTriggerPrefetchJump();
+                sjTriggerPrefetchJump('success-dialog-fallback');
             }
         }
 

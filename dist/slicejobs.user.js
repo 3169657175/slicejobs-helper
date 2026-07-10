@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.1
+// @version      3.9.2
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -23,8 +23,7 @@
     'use strict';
 
     // ============================================================
-    // 网络拦截器：监听 XHR / fetch 响应，自动捕获音频 URL（v3.8）
-    // 必须在所有 STT 函数之前运行，在 Vue 发起 API 请求时即时捕获
+    // 网络拦截器：捕获音频 URL，并在已授权的一键审核提交成功后通知单槽跳转。
     // ============================================================
     (function installAudioInterceptor() {
         const AUDIO_CDN_RE = /https?:\/\/sjaudiopub\.slicejobs\.com\/[^"'\s\\<>\]]+/g;
@@ -52,7 +51,22 @@
             if (matches) matches.forEach(onAudioUrlFound);
         }
 
-        // 拦截 XMLHttpRequest
+        function isAuditSubmitRequest(url, method) {
+            if (String(method || '').toUpperCase() !== 'POST') return false;
+            const value = String(url || '');
+            return (value.includes('/admin/order/audit/') || value.includes('/admin/audit_task/')) &&
+                !['/acquire', '/create', '/get', '/detail', '/history', '/info', '/query']
+                    .some((part) => value.includes(part));
+        }
+
+        function notifyAuditSubmit(meta) {
+            setTimeout(() => {
+                if (typeof sjHandleAuditSubmitResponse === 'function') {
+                    sjHandleAuditSubmitResponse(meta);
+                }
+            }, 0);
+        }
+
         const origOpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
             this._sjUrl = url;
@@ -62,73 +76,36 @@
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
-                const url = this._sjUrl || '';
-                const method = this._sjMethod || 'POST';
-                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
-                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
-                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
-                                      !url.includes('/query');
-                if (this.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
-                    let isSuccess = true;
-                    try {
-                        const resObj = JSON.parse(this.responseText);
-                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                            isSuccess = false;
-                        }
-                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                            isSuccess = false;
-                        }
-                    } catch (e) {}
-                    if (isSuccess) {
-                        console.log('[Prefetch] 拦截到 XHR 审核成功提交，触发极速跳转:', url);
-                        if (typeof sjTriggerPrefetchJump === 'function') {
-                            sjTriggerPrefetchJump();
-                        }
-                    }
+                const responseText = typeof this.responseText === 'string' ? this.responseText : '';
+                scanText(responseText);
+                if (isAuditSubmitRequest(this._sjUrl, this._sjMethod)) {
+                    notifyAuditSubmit({
+                        url: this._sjUrl,
+                        status: this.status,
+                        responseText
+                    });
                 }
-                scanText(this.responseText);
             });
             return origSend.call(this, ...args);
         };
 
-        // 拦截 fetch
         const origFetch = window.fetch;
         if (origFetch) {
-            window.fetch = async function(input, initOptions, ...args) {
-                const url = typeof input === 'string' ? input : (input && input.url || '');
-                const method = initOptions && initOptions.method || 'GET';
-                const response = await origFetch.call(this, input, initOptions, ...args);
-                
-                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
-                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
-                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
-                                      !url.includes('/query');
-                if (response.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
-                    let isSuccess = true;
+            window.fetch = function(input, initOptions, ...args) {
+                const url = typeof input === 'string' ? input : input && input.url || '';
+                const method = initOptions && initOptions.method || input && input.method || 'GET';
+                return origFetch.call(this, input, initOptions, ...args).then((response) => {
                     try {
-                        const clone = response.clone();
-                        const text = await clone.text();
-                        const resObj = JSON.parse(text);
-                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                            isSuccess = false;
-                        }
-                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                            isSuccess = false;
-                        }
-                    } catch (e) {}
-                    if (isSuccess) {
-                        console.log('[Prefetch] 拦截到 fetch 审核成功提交，触发极速跳转:', url);
-                        if (typeof sjTriggerPrefetchJump === 'function') {
-                            sjTriggerPrefetchJump();
-                        }
-                    }
-                }
-
-                try {
-                    const clone = response.clone();
-                    clone.text().then(scanText).catch(() => {});
-                } catch {}
-                return response;
+                        response.clone().text().then((text) => {
+                            scanText(text);
+                            if (isAuditSubmitRequest(url, method)) {
+                                notifyAuditSubmit({ url, status: response.status, responseText: text });
+                            }
+                        }).catch(() => {});
+                    } catch (error) {}
+                    // 立即把响应交还网站，避免插件阻塞网站自己的审核状态更新。
+                    return response;
+                });
             };
         }
     })();
@@ -1458,22 +1435,18 @@
                 autoReviewToast('未找到确认按钮', true);
                 return;
             }
+            sjArmPrefetchJump();
             autoReviewClickEl(confirmBtn);
 
             autoReviewToast('审核已提交，正在等待“审核成功”弹窗...');
             const detectedBtn = await autoReviewWaitForNextOrderButton();
             const waitMs = Number(detectedBtn.dataset.sjAutoReviewWaitMs || 0);
 
-            // 检查是否有预分配的下一单，若有则直接执行极速跳转
-            const match = location.pathname.match(/\/order\/review\/(\d+)/);
-            if (match) {
-                const currentOrderId = match[1];
-                const key = 'sj_pref_' + currentOrderId;
-                if (localStorage.getItem(key)) {
-                    console.log(`[AutoReview] 检测到预分配单号，跳过正常点击按钮，执行极速跳转。`);
-                    sjTriggerPrefetchJump();
-                    return;
-                }
+            // 网络拦截未命中时，以网站成功弹窗作为安全兜底。
+            if (sjHasReadyPrefetchSlot()) {
+                console.log('[AutoReview] 成功弹窗已出现，使用单槽预取订单跳转。');
+                sjTriggerPrefetchJump('success-dialog');
+                return;
             }
 
             const nextBtn = await autoReviewWaitForNextOrderReady(detectedBtn);
@@ -1837,79 +1810,255 @@
     }
 
     // ------------------------------------------------------------
-    // 预取逻辑：提前申请下一单，加速跳转流程 (v3.9)
+    // 单槽预取状态机 (v3.9.2)
+    // 调用网站“开始审单”背后的同一请求，任何时刻最多保存一个待审核订单。
     // ------------------------------------------------------------
-    const sjPrefetchInFlight = new Set();
+    const SJ_PREFETCH_SLOT_KEY = 'sj_prefetch_single_slot_v2';
+    const SJ_PREFETCH_LOCK_KEY = 'sj_prefetch_single_lock_v2';
+    const SJ_PREFETCH_ATTEMPT_PREFIX = 'sj_prefetch_attempt_v2_';
+    const SJ_PREFETCH_SLOT_TTL_MS = 25 * 60 * 1000;
+    const SJ_PREFETCH_ATTEMPT_TTL_MS = 10 * 60 * 1000;
+    const SJ_PREFETCH_ARM_TTL_MS = 2 * 60 * 1000;
+    let sjPrefetchV2InFlight = false;
+    let sjPrefetchJumping = false;
+    let sjAuditJumpArm = null;
 
-    function sjGetActiveProjectId() {
+    function sjGetCurrentOrderId() {
+        const match = location.pathname.match(/\/order\/review\/(\d+)/);
+        return match ? match[1] : null;
+    }
+
+    function sjReadPrefetchSlot() {
+        const raw = localStorage.getItem(SJ_PREFETCH_SLOT_KEY);
+        if (!raw) return null;
         try {
-            const vueEl = document.querySelector('.answer--review, .el-table, *');
-            if (vueEl && vueEl.__vue__ && vueEl.__vue__.$store && vueEl.__vue__.$store.state) {
-                const orderReview = vueEl.__vue__.$store.state.orderReview;
-                if (orderReview && orderReview.orderDetail && orderReview.orderDetail.projectid) {
-                    return orderReview.orderDetail.projectid;
-                }
+            const slot = JSON.parse(raw);
+            const nextOrderId = String(slot && slot.nextOrderId || '');
+            const createdAt = Number(slot && slot.createdAt || 0);
+            if (!/^\d+$/.test(nextOrderId) || !createdAt || Date.now() - createdAt > SJ_PREFETCH_SLOT_TTL_MS) {
+                localStorage.removeItem(SJ_PREFETCH_SLOT_KEY);
+                return null;
             }
-        } catch (e) {
-            console.error('[Prefetch] 提取 projectid 失败:', e);
+            return { ...slot, nextOrderId, createdAt };
+        } catch (error) {
+            localStorage.removeItem(SJ_PREFETCH_SLOT_KEY);
+            return null;
+        }
+    }
+
+    function sjWritePrefetchSlot(slot) {
+        localStorage.setItem(SJ_PREFETCH_SLOT_KEY, JSON.stringify(slot));
+    }
+
+    function sjHasReadyPrefetchSlot() {
+        const slot = sjReadPrefetchSlot();
+        return Boolean(slot && slot.state === 'ready' && slot.nextOrderId !== sjGetCurrentOrderId());
+    }
+
+    function sjFinalizePrefetchSlotForCurrentOrder(currentOrderId) {
+        const slot = sjReadPrefetchSlot();
+        if (!slot) return null;
+        if (slot.nextOrderId === String(currentOrderId) && slot.state === 'consuming') {
+            localStorage.removeItem(SJ_PREFETCH_SLOT_KEY);
+            sjPrefetchJumping = false;
+            console.log(`[Prefetch] 已进入预取订单 ${currentOrderId}，单槽已清空。`);
+            return null;
+        }
+        return slot;
+    }
+
+    function sjFindVueStore() {
+        const candidates = [
+            document.querySelector('#app'),
+            document.querySelector('.answer--review'),
+            document.querySelector('.order-review'),
+            document.querySelector('.el-table')
+        ].filter(Boolean);
+        for (const element of candidates) {
+            let vm = element.__vue__ || null;
+            while (vm) {
+                if (vm.$store && vm.$store.state) return vm.$store;
+                vm = vm.$parent || null;
+            }
         }
         return null;
     }
 
-    function sjPrefetchNextOrder(currentOrderId, projectId) {
-        const key = 'sj_pref_' + currentOrderId;
-        if (localStorage.getItem(key)) return; 
-        if (sjPrefetchInFlight.has(currentOrderId)) return; 
-        sjPrefetchInFlight.add(currentOrderId);
+    function sjGetActiveProjectId() {
+        try {
+            const store = sjFindVueStore();
+            const state = store && store.state;
+            const candidates = [
+                state && state.orderReview && state.orderReview.orderDetail,
+                state && state.orderReview && state.orderReview.detail,
+                state && state.order && state.order.orderDetail
+            ].filter(Boolean);
+            for (const detail of candidates) {
+                const projectId = detail.projectid || detail.projectId;
+                if (projectId) return projectId;
+            }
+        } catch (error) {
+            console.error('[Prefetch] 提取 projectid 失败:', error);
+        }
+        return null;
+    }
 
-        console.log(`[Prefetch] 开始为当前订单 ${currentOrderId} (项目 ${projectId}) 预取下一单...`);
-        
-        const req = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.request : window.request);
-        if (!req || !req.common) {
-            sjPrefetchInFlight.delete(currentOrderId);
-            return;
+    function sjExtractPrefetchedOrderId(response) {
+        const data = response && response.data;
+        const nested = data && data.data;
+        const value = data && (data.orderid || data.orderId) ||
+            nested && (nested.orderid || nested.orderId) ||
+            response && (response.orderid || response.orderId);
+        const orderId = String(value || '');
+        return /^\d+$/.test(orderId) ? orderId : null;
+    }
+
+    function sjAcquirePrefetchLock() {
+        const now = Date.now();
+        try {
+            const existing = JSON.parse(localStorage.getItem(SJ_PREFETCH_LOCK_KEY) || 'null');
+            if (existing && Number(existing.expiresAt) > now) return null;
+        } catch (error) {}
+        const token = `${now}_${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(SJ_PREFETCH_LOCK_KEY, JSON.stringify({ token, expiresAt: now + 30000 }));
+        try {
+            const saved = JSON.parse(localStorage.getItem(SJ_PREFETCH_LOCK_KEY) || 'null');
+            return saved && saved.token === token ? token : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function sjReleasePrefetchLock(token) {
+        try {
+            const saved = JSON.parse(localStorage.getItem(SJ_PREFETCH_LOCK_KEY) || 'null');
+            if (saved && saved.token === token) localStorage.removeItem(SJ_PREFETCH_LOCK_KEY);
+        } catch (error) {}
+    }
+
+    function sjPrefetchNextOrder(currentOrderId, projectId) {
+        currentOrderId = String(currentOrderId || '');
+        if (!/^\d+$/.test(currentOrderId) || !projectId) return Promise.resolve(false);
+        if (sjFinalizePrefetchSlotForCurrentOrder(currentOrderId)) return Promise.resolve(false);
+        if (sjPrefetchV2InFlight) return Promise.resolve(false);
+
+        const attemptKey = SJ_PREFETCH_ATTEMPT_PREFIX + currentOrderId;
+        const previousAttempt = Number(sessionStorage.getItem(attemptKey) || 0);
+        if (previousAttempt && Date.now() - previousAttempt < SJ_PREFETCH_ATTEMPT_TTL_MS) {
+            return Promise.resolve(false);
         }
 
-        req.common("createAuditTask", { projectid: Number(projectId) })
-            .then(res => {
-                const nextOrderId = res && res.data && res.data.orderid;
-                if (nextOrderId) {
-                    localStorage.setItem(key, String(nextOrderId));
-                    console.log(`[Prefetch] 预取下一单成功: 当前 ${currentOrderId} -> 下一单 ${nextOrderId}`);
-                } else {
-                    console.warn('[Prefetch] 接口未返回有效的 orderid:', res);
+        const lockToken = sjAcquirePrefetchLock();
+        if (!lockToken) return Promise.resolve(false);
+        if (sjReadPrefetchSlot()) {
+            sjReleasePrefetchLock(lockToken);
+            return Promise.resolve(false);
+        }
+
+        const req = typeof unsafeWindow !== 'undefined' && unsafeWindow.request || window.request;
+        if (!req || typeof req.common !== 'function') {
+            sjReleasePrefetchLock(lockToken);
+            return Promise.resolve(false);
+        }
+
+        sjPrefetchV2InFlight = true;
+        sessionStorage.setItem(attemptKey, String(Date.now()));
+        console.log(`[Prefetch] 单槽为空，为订单 ${currentOrderId} 预取一单。`);
+
+        return Promise.resolve(req.common('createAuditTask', { projectid: Number(projectId) }))
+            .then((response) => {
+                const nextOrderId = sjExtractPrefetchedOrderId(response);
+                if (!nextOrderId || nextOrderId === currentOrderId) {
+                    console.warn('[Prefetch] 开始审单请求未返回有效的新订单号:', response);
+                    return false;
                 }
+                if (sjReadPrefetchSlot()) return false;
+                sjWritePrefetchSlot({
+                    state: 'ready',
+                    nextOrderId,
+                    projectId: String(projectId),
+                    createdAt: Date.now()
+                });
+                console.log(`[Prefetch] 单槽已保存订单 ${nextOrderId}。`);
+                return true;
             })
-            .catch(err => {
-                console.error('[Prefetch] 调用 createAuditTask 失败:', err);
+            .catch((error) => {
+                // 本订单不自动重试，避免响应丢失时重复领取。
+                console.error('[Prefetch] 预取失败，本订单将回退官方下一单流程:', error);
+                return false;
             })
             .finally(() => {
-                sjPrefetchInFlight.delete(currentOrderId);
+                sjPrefetchV2InFlight = false;
+                sjReleasePrefetchLock(lockToken);
             });
     }
 
-    function sjTriggerPrefetchJump() {
-        const match = location.pathname.match(/\/order\/review\/(\d+)/);
-        if (!match) return;
-        const currentOrderId = match[1];
-        const key = 'sj_pref_' + currentOrderId;
-        const nextOrderId = localStorage.getItem(key);
-        if (nextOrderId) {
-            localStorage.removeItem(key); 
-            console.log(`[Prefetch] 触发极速跳转: ${currentOrderId} -> ${nextOrderId}`);
-            
-            autoReviewToast(`已获得预取单号 ${nextOrderId}，正在极速跳转下一单...`);
-            
-            try {
-                const vueEl = document.querySelector('.answer--review, .el-table, *');
-                if (vueEl && vueEl.__vue__ && vueEl.__vue__.$router) {
-                    vueEl.__vue__.$router.push('/order/review/' + nextOrderId);
-                    return;
-                }
-            } catch (e) {
-                console.error('[Prefetch] Vue Router 跳转失败，将回退至整页刷新:', e);
+    function sjArmPrefetchJump() {
+        const currentOrderId = sjGetCurrentOrderId();
+        if (!currentOrderId || !sjHasReadyPrefetchSlot()) {
+            sjAuditJumpArm = null;
+            return false;
+        }
+        sjAuditJumpArm = { currentOrderId, armedAt: Date.now() };
+        return true;
+    }
+
+    function sjAuditResponseIsSuccessful(status, responseText) {
+        if (Number(status) < 200 || Number(status) >= 300) return false;
+        const text = typeof responseText === 'string' ? responseText.trim() : '';
+        if (!text) return true;
+        try {
+            const data = JSON.parse(text);
+            if (data && data.success === false) return false;
+            if (data && data.code !== undefined && ![0, 200].includes(Number(data.code))) return false;
+            if (data && data.status !== undefined && ![0, 200].includes(Number(data.status))) return false;
+        } catch (error) {
+            // 有些提交接口成功时返回纯文本；HTTP 2xx 且已由确认按钮授权即可继续。
+        }
+        return true;
+    }
+
+    function sjHandleAuditSubmitResponse(meta) {
+        const arm = sjAuditJumpArm;
+        if (!arm || Date.now() - arm.armedAt > SJ_PREFETCH_ARM_TTL_MS) {
+            sjAuditJumpArm = null;
+            return false;
+        }
+        if (sjGetCurrentOrderId() !== arm.currentOrderId) return false;
+        if (!sjAuditResponseIsSuccessful(meta && meta.status, meta && meta.responseText)) return false;
+        sjAuditJumpArm = null;
+        return sjTriggerPrefetchJump('submit-response');
+    }
+
+    function sjTriggerPrefetchJump(reason = 'fallback') {
+        if (sjPrefetchJumping) return false;
+        const currentOrderId = sjGetCurrentOrderId();
+        const slot = sjReadPrefetchSlot();
+        if (!currentOrderId || !slot || slot.state !== 'ready' || slot.nextOrderId === currentOrderId) return false;
+
+        sjPrefetchJumping = true;
+        sjWritePrefetchSlot({ ...slot, state: 'consuming', fromOrderId: currentOrderId, consumedAt: Date.now() });
+        console.log(`[Prefetch] ${reason}: ${currentOrderId} -> ${slot.nextOrderId}`);
+        autoReviewToast(`审核提交成功，正在进入已预取订单 ${slot.nextOrderId}...`);
+
+        const restoreTimer = setTimeout(() => {
+            if (sjGetCurrentOrderId() !== currentOrderId) return;
+            const pending = sjReadPrefetchSlot();
+            if (pending && pending.state === 'consuming' && pending.nextOrderId === slot.nextOrderId) {
+                sjWritePrefetchSlot({ ...pending, state: 'ready' });
             }
-            location.href = '/order/review/' + nextOrderId;
+            sjPrefetchJumping = false;
+        }, 8000);
+
+        try {
+            location.assign('/order/review/' + slot.nextOrderId);
+            return true;
+        } catch (error) {
+            clearTimeout(restoreTimer);
+            sjWritePrefetchSlot({ ...slot, state: 'ready' });
+            sjPrefetchJumping = false;
+            console.error('[Prefetch] 跳转失败，已恢复单槽:', error);
+            return false;
         }
     }
 
@@ -3867,19 +4016,20 @@
             // 自动折叠非必须审核的题目卡片
             autoReviewCollapseUnneeded();
 
-            // 预取下一单 ID 逻辑 (v3.9)
+            // 单槽预取：进入新订单后清空已消费槽，再补充且只补充一单。
             const match = location.pathname.match(/\/order\/review\/(\d+)/);
             if (match) {
                 const currentOrderId = match[1];
+                sjFinalizePrefetchSlotForCurrentOrder(currentOrderId);
                 const projectId = sjGetActiveProjectId();
                 if (projectId) {
                     sjPrefetchNextOrder(currentOrderId, projectId);
                 }
             }
 
-            // 兜底检测成功弹窗，如果发现有预分配单号，立刻触发极速跳转
+            // 网络拦截未命中时，以网站成功弹窗兜底。
             if (typeof autoReviewGetVisibleSuccessDialog === 'function' && autoReviewGetVisibleSuccessDialog()) {
-                sjTriggerPrefetchJump();
+                sjTriggerPrefetchJump('success-dialog-fallback');
             }
         }
 
