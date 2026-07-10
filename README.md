@@ -12,8 +12,9 @@
 
 1.  在浏览器安装 **Tampermonkey (油猴)** 扩展。
 2.  点击下方链接直接安装或自动更新至最新版本：
-    *   👉 **[点此直链安装/更新《爱零工审单数据助手》](https://cdn.jsdelivr.net/gh/3169657175/slicejobs-helper@master/dist/slicejobs.user.js)**
-    *(点击后油猴会自动拦截并弹出安装/更新确认页面，点击“安装”或“更新”即可)*
+    *   🌐 **[点此使用 GitHub 官方直连通道安装 (更新无延迟，但国内访问慢)](https://raw.githubusercontent.com/3169657175/slicejobs-helper/master/dist/slicejobs.user.js)**
+    *   ⚡ **[点此使用 jsDelivr CDN 加速通道安装 (国内免代理，但更新有缓存延迟)](https://cdn.jsdelivr.net/gh/3169657175/slicejobs-helper@master/dist/slicejobs.user.js)**
+    *(点击后油猴会自动拦截并弹出确认页面，选择其一即可)*
 3.  匹配域名：`*://admin2.slicejobs.com/*`
 
 ---
