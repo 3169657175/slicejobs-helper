@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.0
+// @version      3.9.1
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -64,23 +64,25 @@
             this.addEventListener('load', function() {
                 const url = this._sjUrl || '';
                 const method = this._sjMethod || 'POST';
-                if (this.status === 200 && method.toUpperCase() === 'POST' && url.includes('/admin/audit_task/')) {
-                    if (!url.includes('/create') && !url.includes('/get') && !url.includes('/detail') && !url.includes('/history') && !url.includes('/info')) {
-                        let isSuccess = true;
-                        try {
-                            const resObj = JSON.parse(this.responseText);
-                            if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                                isSuccess = false;
-                            }
-                            if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                                isSuccess = false;
-                            }
-                        } catch (e) {}
-                        if (isSuccess) {
-                            console.log('[Prefetch] 拦截到 XHR 审核成功提交，触发极速跳转:', url);
-                            if (typeof sjTriggerPrefetchJump === 'function') {
-                                sjTriggerPrefetchJump();
-                            }
+                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
+                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
+                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
+                                      !url.includes('/query');
+                if (this.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
+                    let isSuccess = true;
+                    try {
+                        const resObj = JSON.parse(this.responseText);
+                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
+                            isSuccess = false;
+                        }
+                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
+                            isSuccess = false;
+                        }
+                    } catch (e) {}
+                    if (isSuccess) {
+                        console.log('[Prefetch] 拦截到 XHR 审核成功提交，触发极速跳转:', url);
+                        if (typeof sjTriggerPrefetchJump === 'function') {
+                            sjTriggerPrefetchJump();
                         }
                     }
                 }
@@ -97,25 +99,27 @@
                 const method = initOptions && initOptions.method || 'GET';
                 const response = await origFetch.call(this, input, initOptions, ...args);
                 
-                if (response.status === 200 && method.toUpperCase() === 'POST' && url.includes('/admin/audit_task/')) {
-                    if (!url.includes('/create') && !url.includes('/get') && !url.includes('/detail') && !url.includes('/history') && !url.includes('/info')) {
-                        let isSuccess = true;
-                        try {
-                            const clone = response.clone();
-                            const text = await clone.text();
-                            const resObj = JSON.parse(text);
-                            if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
-                                isSuccess = false;
-                            }
-                            if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
-                                isSuccess = false;
-                            }
-                        } catch (e) {}
-                        if (isSuccess) {
-                            console.log('[Prefetch] 拦截到 fetch 审核成功提交，触发极速跳转:', url);
-                            if (typeof sjTriggerPrefetchJump === 'function') {
-                                sjTriggerPrefetchJump();
-                            }
+                const isAuditSubmit = (url.includes('/admin/order/audit/') || url.includes('/admin/audit_task/')) &&
+                                      !url.includes('/acquire') && !url.includes('/create') && !url.includes('/get') &&
+                                      !url.includes('/detail') && !url.includes('/history') && !url.includes('/info') &&
+                                      !url.includes('/query');
+                if (response.status === 200 && method.toUpperCase() === 'POST' && isAuditSubmit) {
+                    let isSuccess = true;
+                    try {
+                        const clone = response.clone();
+                        const text = await clone.text();
+                        const resObj = JSON.parse(text);
+                        if (resObj && (resObj.code !== undefined && resObj.code !== 200 && resObj.code !== 0)) {
+                            isSuccess = false;
+                        }
+                        if (resObj && (resObj.status !== undefined && resObj.status !== 200 && resObj.status !== 0)) {
+                            isSuccess = false;
+                        }
+                    } catch (e) {}
+                    if (isSuccess) {
+                        console.log('[Prefetch] 拦截到 fetch 审核成功提交，触发极速跳转:', url);
+                        if (typeof sjTriggerPrefetchJump === 'function') {
+                            sjTriggerPrefetchJump();
                         }
                     }
                 }
@@ -1459,6 +1463,19 @@
             autoReviewToast('审核已提交，正在等待“审核成功”弹窗...');
             const detectedBtn = await autoReviewWaitForNextOrderButton();
             const waitMs = Number(detectedBtn.dataset.sjAutoReviewWaitMs || 0);
+
+            // 检查是否有预分配的下一单，若有则直接执行极速跳转
+            const match = location.pathname.match(/\/order\/review\/(\d+)/);
+            if (match) {
+                const currentOrderId = match[1];
+                const key = 'sj_pref_' + currentOrderId;
+                if (localStorage.getItem(key)) {
+                    console.log(`[AutoReview] 检测到预分配单号，跳过正常点击按钮，执行极速跳转。`);
+                    sjTriggerPrefetchJump();
+                    return;
+                }
+            }
+
             const nextBtn = await autoReviewWaitForNextOrderReady(detectedBtn);
             const stableMs = Number(nextBtn.dataset.sjAutoReviewStableMs || 0);
             const waitText = waitMs > 0 ? `（弹窗等待 ${(waitMs / 1000).toFixed(1)} 秒）` : '';

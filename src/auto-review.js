@@ -362,6 +362,19 @@
             autoReviewToast('审核已提交，正在等待“审核成功”弹窗...');
             const detectedBtn = await autoReviewWaitForNextOrderButton();
             const waitMs = Number(detectedBtn.dataset.sjAutoReviewWaitMs || 0);
+
+            // 检查是否有预分配的下一单，若有则直接执行极速跳转
+            const match = location.pathname.match(/\/order\/review\/(\d+)/);
+            if (match) {
+                const currentOrderId = match[1];
+                const key = 'sj_pref_' + currentOrderId;
+                if (localStorage.getItem(key)) {
+                    console.log(`[AutoReview] 检测到预分配单号，跳过正常点击按钮，执行极速跳转。`);
+                    sjTriggerPrefetchJump();
+                    return;
+                }
+            }
+
             const nextBtn = await autoReviewWaitForNextOrderReady(detectedBtn);
             const stableMs = Number(nextBtn.dataset.sjAutoReviewStableMs || 0);
             const waitText = waitMs > 0 ? `（弹窗等待 ${(waitMs / 1000).toFixed(1)} 秒）` : '';
