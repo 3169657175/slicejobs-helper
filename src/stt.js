@@ -1949,6 +1949,21 @@
 
             // 自动折叠非必须审核的题目卡片
             autoReviewCollapseUnneeded();
+
+            // 预取下一单 ID 逻辑 (v3.9)
+            const match = location.pathname.match(/\/order\/review\/(\d+)/);
+            if (match) {
+                const currentOrderId = match[1];
+                const projectId = sjGetActiveProjectId();
+                if (projectId) {
+                    sjPrefetchNextOrder(currentOrderId, projectId);
+                }
+            }
+
+            // 兜底检测成功弹窗，如果发现有预分配单号，立刻触发极速跳转
+            if (typeof autoReviewGetVisibleSuccessDialog === 'function' && autoReviewGetVisibleSuccessDialog()) {
+                sjTriggerPrefetchJump();
+            }
         }
 
         // AI 字幕识别

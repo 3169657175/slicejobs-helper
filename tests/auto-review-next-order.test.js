@@ -72,6 +72,7 @@ function successDialog(buttons) {
   assert(!source.includes('最大等待4秒'), 'legacy fixed four-second polling must be removed');
   assert(!source.includes('自动确认，正在重试下一单'), 'state-changed warning must not be auto-dismissed and retried');
   assert(source.includes('Success dialog detected after'), 'timing diagnostics should distinguish plugin delay from site loading');
+  assert(source.includes('后续为网站加载'), 'user-facing status should distinguish click timing from site loading');
 
   console.log('Auto-review next-order synchronization tests passed');
 })().catch(error => {

@@ -1,4 +1,4 @@
-﻿    // 一键通过审核助手功能组 (无 this 闭包版本)
+    // 一键通过审核助手功能组 (无 this 闭包版本)
     // ==========================================
     let autoReviewToastEl = null;
     let autoReviewRunning = false; // ③ 执行锁，防止并发触发
@@ -366,7 +366,7 @@
             const stableMs = Number(nextBtn.dataset.sjAutoReviewStableMs || 0);
             const waitText = waitMs > 0 ? `（弹窗等待 ${(waitMs / 1000).toFixed(1)} 秒）` : '';
             console.log(`[AutoReview] Success dialog detected after ${waitMs}ms; button stabilized for ${stableMs}ms; clicking next order now.`);
-            autoReviewToast(`已检测到审核成功弹窗${waitText}，按钮已稳定，正在进入下一单...`);
+            autoReviewToast(`审核成功${waitText}；插件在弹窗出现后 ${(stableMs / 1000).toFixed(1)} 秒已点击下一单，后续为网站加载...`);
             autoReviewClickEl(nextBtn);
         } catch (err) {
             console.error(err);
@@ -722,3 +722,79 @@
         autoReviewCreatePanel();
     }
 
+    // ------------------------------------------------------------
+    // 预取逻辑：提前申请下一单，加速跳转流程 (v3.9)
+    // ------------------------------------------------------------
+    const sjPrefetchInFlight = new Set();
+
+    function sjGetActiveProjectId() {
+        try {
+            const vueEl = document.querySelector('.answer--review, .el-table, *');
+            if (vueEl && vueEl.__vue__ && vueEl.__vue__.$store && vueEl.__vue__.$store.state) {
+                const orderReview = vueEl.__vue__.$store.state.orderReview;
+                if (orderReview && orderReview.orderDetail && orderReview.orderDetail.projectid) {
+                    return orderReview.orderDetail.projectid;
+                }
+            }
+        } catch (e) {
+            console.error('[Prefetch] 提取 projectid 失败:', e);
+        }
+        return null;
+    }
+
+    function sjPrefetchNextOrder(currentOrderId, projectId) {
+        const key = 'sj_pref_' + currentOrderId;
+        if (localStorage.getItem(key)) return; 
+        if (sjPrefetchInFlight.has(currentOrderId)) return; 
+        sjPrefetchInFlight.add(currentOrderId);
+
+        console.log(`[Prefetch] 开始为当前订单 ${currentOrderId} (项目 ${projectId}) 预取下一单...`);
+        
+        const req = (typeof unsafeWindow !== 'undefined' ? unsafeWindow.request : window.request);
+        if (!req || !req.common) {
+            sjPrefetchInFlight.delete(currentOrderId);
+            return;
+        }
+
+        req.common("createAuditTask", { projectid: Number(projectId) })
+            .then(res => {
+                const nextOrderId = res && res.data && res.data.orderid;
+                if (nextOrderId) {
+                    localStorage.setItem(key, String(nextOrderId));
+                    console.log(`[Prefetch] 预取下一单成功: 当前 ${currentOrderId} -> 下一单 ${nextOrderId}`);
+                } else {
+                    console.warn('[Prefetch] 接口未返回有效的 orderid:', res);
+                }
+            })
+            .catch(err => {
+                console.error('[Prefetch] 调用 createAuditTask 失败:', err);
+            })
+            .finally(() => {
+                sjPrefetchInFlight.delete(currentOrderId);
+            });
+    }
+
+    function sjTriggerPrefetchJump() {
+        const match = location.pathname.match(/\/order\/review\/(\d+)/);
+        if (!match) return;
+        const currentOrderId = match[1];
+        const key = 'sj_pref_' + currentOrderId;
+        const nextOrderId = localStorage.getItem(key);
+        if (nextOrderId) {
+            localStorage.removeItem(key); 
+            console.log(`[Prefetch] 触发极速跳转: ${currentOrderId} -> ${nextOrderId}`);
+            
+            autoReviewToast(`已获得预取单号 ${nextOrderId}，正在极速跳转下一单...`);
+            
+            try {
+                const vueEl = document.querySelector('.answer--review, .el-table, *');
+                if (vueEl && vueEl.__vue__ && vueEl.__vue__.$router) {
+                    vueEl.__vue__.$router.push('/order/review/' + nextOrderId);
+                    return;
+                }
+            } catch (e) {
+                console.error('[Prefetch] Vue Router 跳转失败，将回退至整页刷新:', e);
+            }
+            location.href = '/order/review/' + nextOrderId;
+        }
+    }
