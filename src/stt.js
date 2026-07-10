@@ -359,9 +359,17 @@
 
     function sttRenderNativeReuse(bar, dialogBody, segments, audio) {
         sttRestoreNativeSubtitles(audio, segments);
+        const analysis = sttAnalyzeBusinessClues(segments, audio && audio.src || 'native://dialog');
+        const matchedKinds = [];
+        if (analysis.price.length > 0) matchedKinds.push('Q10价格');
+        if (analysis.stock.length > 0) matchedKinds.push('Q15库存');
+        const statusText = matchedKinds.length > 0
+            ? `原生字幕命中：${matchedKinds.join('、')}，未调用AI`
+            : '已回退原生字幕；未发现价格/库存线索';
+        const statusColor = matchedKinds.length > 0 ? '#3fb950' : '#d29922';
         bar.innerHTML = `
             <div style="display:flex; align-items:center; gap:12px; flex:1;">
-                <span style="color:#3fb950; font-weight:bold; white-space:nowrap;">原生字幕已命中业务词，未调用AI</span>
+                <span style="color:${statusColor}; font-weight:bold; white-space:nowrap;">${statusText}</span>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
                 ${sttRenderAiToggleButton()}
@@ -866,26 +874,8 @@
     }
 
     function sttNativeHasUsefulBusinessSignal(segments) {
-        const text = (segments || []).map(s => s.text || '').join('');
-        const normalized = sttNormalizeBusinessText(text);
-        if (!normalized) return false;
-
-        const compact = normalized.replace(/\s+/g, '');
-        const productMatches = Array.from(compact.matchAll(/脉动|电解质|1L|一升|大瓶|六百|600m?l?/gi));
-        const businessMatches = Array.from(compact.matchAll(/多少钱|价格|价钱|几块|块钱|售价|多少一|库存|仓库|现货|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+(?:\.\d+)?(?:元|块|毛|角|箱|件)|[一二三四五六七八九十百两]+(?:元|块|毛|角|箱|件)|专柜|冰柜|货架|陈列|拍照|照片/g));
-
-        // 只有产品与价格/库存词出现在同一小段上下文中才算命中。
-        // 避免长录音里“微信收款三十元”和很远处“刘医生”被错误拼成 1L 价格线索。
-        return productMatches.some(product => businessMatches.some(business => {
-            const productEnd = product.index + product[0].length;
-            const businessEnd = business.index + business[0].length;
-            const gap = productEnd <= business.index
-                ? business.index - productEnd
-                : businessEnd <= product.index
-                    ? product.index - businessEnd
-                    : 0;
-            return gap <= 36;
-        }));
+        const analysis = sttAnalyzeBusinessClues(segments, 'native://probe');
+        return analysis.price.length > 0 || analysis.stock.length > 0;
     }
 
     function sttTryUseNativeSubtitles(audio, dialogBody, bar, reason) {
@@ -1137,10 +1127,10 @@
         return answers;
     }
 
-    function sttBuildBusinessClues(kind) {
+    function sttBuildBusinessClues(kind, transcripts = sttCurrentOrderTranscripts) {
         const items = [];
-        for (const audioUrl in sttCurrentOrderTranscripts) {
-            const segs = sttCurrentOrderTranscripts[audioUrl];
+        for (const audioUrl in transcripts) {
+            const segs = transcripts[audioUrl];
             if (!Array.isArray(segs)) continue;
             segs.forEach(seg => {
                 sttSplitSentencesWithTime(seg).forEach(item => {
@@ -1240,6 +1230,14 @@
         return clues
             .sort((a, b) => (rank[b.confidence] - rank[a.confidence]) || (a.start - b.start))
             .slice(0, 2);
+    }
+
+    function sttAnalyzeBusinessClues(segments, audioUrl = 'native://probe') {
+        const transcripts = { [audioUrl]: Array.isArray(segments) ? segments : [] };
+        return {
+            price: sttBuildBusinessClues('price', transcripts),
+            stock: sttBuildBusinessClues('stock', transcripts)
+        };
     }
 
     function sttFormatBusinessClues(kind, clues) {
