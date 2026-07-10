@@ -1287,7 +1287,7 @@
 
         const bar = sttGetStatusBar(dialogBody);
 
-        const cached = sttReadCache(src);
+        const cached = (!forceAi && !sttIsAiEnabled()) ? null : sttReadCache(src);
         if (cached) {
             if (sttHasUsefulBusinessSignal(cached)) {
                 replaceNativeSubtitles(cached, src);
