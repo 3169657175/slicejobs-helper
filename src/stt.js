@@ -1714,7 +1714,7 @@
             const { card, qNum, titleEl } = cardInfo;
             let shouldCollapse = false;
 
-            if (['Q1', 'Q2', 'Q6', 'Q14', 'Q16', 'Q17'].includes(qNum)) {
+            if (['Q1', 'Q2', 'Q6', 'Q14', 'Q17'].includes(qNum)) {
                 // 这些题目默认折叠（除非用户手动展开了）
                 shouldCollapse = !sttManuallyExpanded.has(qNum);
             } else if (qNum === 'Q13') {
