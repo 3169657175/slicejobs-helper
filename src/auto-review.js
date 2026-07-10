@@ -1130,7 +1130,7 @@
             autoReviewToast('下一单尚未缓存完成，请稍等后再跳过。', true);
             return;
         }
-        if (!window.confirm('确定跳过当前订单吗？插件会先取消占有，再进入下一单。')) return;
+
 
         sjSkipRunning = true;
         if (button) {

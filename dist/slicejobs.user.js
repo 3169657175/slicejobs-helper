@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.4
+// @version      3.9.5
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2208,7 +2208,7 @@
             autoReviewToast('下一单尚未缓存完成，请稍等后再跳过。', true);
             return;
         }
-        if (!window.confirm('确定跳过当前订单吗？插件会先取消占有，再进入下一单。')) return;
+
 
         sjSkipRunning = true;
         if (button) {
