@@ -247,9 +247,12 @@
         btn.addEventListener('click', () => {
             const next = !sttIsAiEnabled();
             sttSetAiEnabled(next);
-            if (next && rerunAfterEnable) {
-                sttProcess(audio, dialogBody);
+            if (next) {
+                sttProcess(audio, dialogBody, true);
             } else {
+                if (audio && audio.src && sttTryUseNativeSubtitlesFallback(audio, dialogBody, bar, 'ai-disabled-toggle')) {
+                    return;
+                }
                 sttRenderAiDisabled(bar, audio, dialogBody);
             }
         });
@@ -262,6 +265,12 @@
                 ${sttRenderAiToggleButton()}
                 <button id="sj-stt-ai-enable-now" style="background:#238636;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;white-space:nowrap;">开启并识别</button>
             </div>`;
+        
+        if (audio && audio.src) {
+            sttCurrentOrderTranscripts[audio.src] = [];
+            sttUpdateContextualTips();
+        }
+
         sttBindAiToggle(bar, audio, dialogBody, true);
         const enableBtn = bar.querySelector('#sj-stt-ai-enable-now');
         if (enableBtn) {
@@ -1330,6 +1339,14 @@
             const result = await sttTranscribeWithFallback(providers, blob, (provider) => {
                 sttRenderLoading(bar, provider);
             });
+
+            // 接口返回后重新检查 AI 开关状态，若已被用户关闭则直接丢弃
+            if (!sttIsAiEnabled()) {
+                console.log('[STT] AI was disabled mid-flight, discarding results.');
+                if (sttTryUseNativeSubtitlesFallback(audio, dialogBody, bar, 'ai-disabled-midflight')) return;
+                sttRenderAiDisabled(bar, audio, dialogBody);
+                return;
+            }
 
             const audioDuration = Number(audio.duration) || sttParseDurationFromSrc(src) || 0;
             let segs = parseApiResponse(result, audioDuration);
