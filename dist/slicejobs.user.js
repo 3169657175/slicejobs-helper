@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.8.0
+// @version      3.8.1
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2549,28 +2549,22 @@
         const normalized = sttNormalizeBusinessText(text);
         if (!normalized) return false;
 
-        const rawAndNormalized = `${text} ${normalized}`;
-        const compact = rawAndNormalized.replace(/\s+/g, '');
+        const compact = normalized.replace(/\s+/g, '');
+        const productMatches = Array.from(compact.matchAll(/脉动|电解质|1L|一升|大瓶|六百|600m?l?/gi));
+        const businessMatches = Array.from(compact.matchAll(/多少钱|价格|价钱|几块|块钱|售价|多少一|库存|仓库|现货|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+(?:\.\d+)?(?:元|块|毛|角|箱|件)|[一二三四五六七八九十百两]+(?:元|块|毛|角|箱|件)|专柜|冰柜|货架|陈列|拍照|照片/g));
 
-        // 原生字幕经常把业务词识别成谐音/错字：脉动->卖动/麦动/卖手，1L->一生/医生，600ml->六百。
-        // 对原生字幕要更宽松：只要有疑似产品词 + 价格/库存词，就先用原生，避免无谓调用 AI。
-        const productHits = (compact.match(/脉动|卖动|麦动|麦豆|脉豆|迈动|买动|卖手|电解|电解质|电解字|电解值|电解至|1L|一升|一生|医生|一身|大瓶|六百|600m?l?/gi) || []).length;
-        const priceHits = (compact.match(/多少钱|价格|价钱|几块|几块的|几块呀|几块啊|块钱|多少一|\d+(?:\.\d+)?(?:元|块|毛|角)|[一二三四五六七八九十两][块元毛角]/g) || []).length;
-        const stockHits = (compact.match(/库存|仓库|现货|见货|库村|库纯|库层|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|箱|库存就是|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/g) || []).length;
-        if (productHits > 0 && (priceHits > 0 || stockHits > 0)) return true;
-        if (/(脉动|卖动|麦动|麦豆|脉豆|迈动|买动).{0,20}(库存|仓库|现货|见货|库村|库纯|库层|整箱|几箱|几件|\d+(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|箱)/.test(compact)) return true;
-        if (/(脉动|卖动|麦动|迈动|买动).{0,24}(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片)/.test(compact)) return true;
-        if (/(专柜|冰柜|货架|陈列|有吗|有没有|没有|拍照|照片).{0,24}(脉动|卖动|麦动|迈动|买动)/.test(compact)) return true;
-        if (/(电解|电解质|电解字|电解值|电解至|一升|一生|医生|六百).{0,12}(价格|价钱|几块|块|元)/.test(compact)) return true;
-        if (sttIsHallucination(normalized)) return false;
-
-        const hasPulse = /脉动/.test(normalized);
-        const hasProduct = hasPulse || /电解质|1L|一升|大瓶/.test(normalized);
-        const hasPrice = /多少钱|价格|几块|块钱|售价|多少一|\d+(?:\.\d+)?\s*(元|块|毛|角)/.test(normalized);
-        const hasStock = /库存|仓库|现货|整箱|几箱|几件|多少箱|还有货|有没有|还有多少|有多少箱|剩多少|断货|进货|\d+\s*(?:箱|件)|[一二三四五六七八九十百两]+(?:箱|件)|专柜|冰柜|货架|陈列|有吗|没有|拍照|照片/.test(normalized);
-
-        // 原生字幕必须同时出现产品锚点和业务锚点，避免只凭“多少钱”或“几箱”误判。
-        return hasProduct && (hasPrice || hasStock);
+        // 只有产品与价格/库存词出现在同一小段上下文中才算命中。
+        // 避免长录音里“微信收款三十元”和很远处“刘医生”被错误拼成 1L 价格线索。
+        return productMatches.some(product => businessMatches.some(business => {
+            const productEnd = product.index + product[0].length;
+            const businessEnd = business.index + business[0].length;
+            const gap = productEnd <= business.index
+                ? business.index - productEnd
+                : businessEnd <= product.index
+                    ? product.index - businessEnd
+                    : 0;
+            return gap <= 36;
+        }));
     }
 
     function sttTryUseNativeSubtitles(audio, dialogBody, bar, reason) {
@@ -2735,6 +2729,9 @@
         const rules = [
             [/卖动|麦动|麦豆|脉豆|迈动|脉懂|脉东|脉董|脉冻|脉通|脉同|买动|脉洞|故划通|故划|麦通/g, '脉动'],
             [/电解字|电解值|电解至|电解纸|电解制|电解智|电解子|电解汁|电解植|长烦|长瓶|电解/g, '电解质'],
+            [/医生(?=.{0,10}(?:多少钱|价格|价钱|几块|块|元))/g, '1L'],
+            [/(多少钱|价格|价钱|几块|\d+(?:\.\d+)?(?:块|元)).{0,10}医生/g, '$1 1L'],
+            [/(?:一生|一身)(?=.{0,10}(?:多少钱|价格|价钱|几块|块|元))/g, '1L'],
             [/一\s*[lL]|1\s*[lL]|一升|1升|大瓶子|大瓶的|大平|大品|大屏|大瓶装/g, '1L'],
             [/一起见货|一其见货|一齐见货/g, '一共几件货'],
             [/见货|现获/g, '现货'],
