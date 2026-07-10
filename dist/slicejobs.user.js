@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.6
+// @version      3.9.7
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -1663,28 +1663,62 @@
         document.getElementById('sj-open-recording-btn')?.remove();
         document.getElementById('sj-open-audio-btn')?.remove();
 
+        // ── 注入动画样式 ──
+        if (!document.getElementById('sj-panel-styles')) {
+            const style = document.createElement('style');
+            style.id = 'sj-panel-styles';
+            style.textContent = `
+                @keyframes sj-pulse {
+                    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+                    70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+                }
+                .sj-pulse-dot {
+                    animation: sj-pulse 2s infinite;
+                }
+                .sj-panel-btn {
+                    position: relative;
+                    overflow: hidden;
+                }
+                .sj-panel-btn::after {
+                    content: '';
+                    position: absolute;
+                    top: 0; left: 0; width: 100%; height: 100%;
+                    background: linear-gradient(rgba(255,255,255,0.15), rgba(255,255,255,0));
+                    opacity: 0;
+                    transition: opacity 0.2s;
+                    pointer-events: none;
+                }
+                .sj-panel-btn:hover::after {
+                    opacity: 1;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
         // ── 面板容器 ──
         const panel = document.createElement('div');
         panel.id = 'sj-control-panel';
         Object.assign(panel.style, {
             position: 'fixed',
             top: '50%',
-            right: '16px',
+            right: '20px',
             transform: 'translateY(-50%)',
             zIndex: 999998,
             display: 'flex',
             flexDirection: 'column',
-            gap: '5px',
-            padding: '10px 8px 10px',
-            width: '132px',
-            background: 'rgba(13, 17, 28, 0.88)',
-            border: '1px solid rgba(255,255,255,0.09)',
-            borderRadius: '10px',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04) inset',
+            gap: '8px',
+            padding: '12px',
+            width: '142px',
+            background: 'linear-gradient(135deg, rgba(24, 28, 41, 0.95) 0%, rgba(14, 17, 24, 0.98) 100%)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius: '14px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.35), inset 0 1px 1px rgba(255,255,255,0.1)',
             backdropFilter: 'blur(16px)',
             WebkitBackdropFilter: 'blur(16px)',
             userSelect: 'none',
-            fontFamily: '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
+            fontFamily: '-apple-system, "SF Pro Text", "SF Pro Icons", "PingFang SC", "Microsoft YaHei", sans-serif',
+            transition: 'border-color 0.3s, box-shadow 0.3s',
         });
 
         // ── 标题栏 ──
@@ -1692,30 +1726,30 @@
         Object.assign(header.style, {
             display: 'flex',
             alignItems: 'center',
-            gap: '5px',
-            paddingBottom: '7px',
-            marginBottom: '1px',
-            borderBottom: '1px solid rgba(255,255,255,0.07)',
+            gap: '6px',
+            paddingBottom: '8px',
+            marginBottom: '2px',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
             cursor: 'grab',
         });
 
         const dot = document.createElement('span');
+        dot.className = 'sj-pulse-dot';
         Object.assign(dot.style, {
-            width: '5px', height: '5px',
+            width: '6px',
+            height: '6px',
             borderRadius: '50%',
-            background: '#22c55e',
-            boxShadow: '0 0 5px rgba(34,197,94,0.9)',
+            background: '#10b981',
             flexShrink: '0',
         });
 
         const titleText = document.createElement('span');
-        titleText.textContent = 'AI 审核辅助';
+        titleText.textContent = 'AI 审核助手';
         Object.assign(titleText.style, {
-            color: 'rgba(255,255,255,0.4)',
-            fontSize: '10px',
+            color: '#e2e8f0',
+            fontSize: '11px',
             fontWeight: '600',
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
         });
 
         header.appendChild(dot);
@@ -1723,32 +1757,39 @@
         panel.appendChild(header);
 
         // ── 按钮工厂 ──
-        const makePanelBtn = (id, icon, label, colorDark, colorLight, glowColor) => {
+        const makePanelBtn = (id, icon, label, bgGradient, glowColor) => {
             const btn = document.createElement('button');
             btn.id = id;
+            btn.className = 'sj-panel-btn';
             btn.title = '';
             Object.assign(btn.style, {
                 width: '100%',
-                height: '34px',
+                height: '36px',
                 border: 'none',
-                borderRadius: '7px',
-                color: '#fff',
-                fontSize: '12.5px',
+                borderRadius: '8px',
+                color: '#ffffff',
+                fontSize: '13px',
                 fontWeight: '600',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '5px',
-                background: `linear-gradient(155deg, ${colorLight}, ${colorDark})`,
-                boxShadow: `0 2px 8px ${glowColor}`,
-                transition: 'transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease',
-                letterSpacing: '0.01em',
+                gap: '6px',
+                background: bgGradient,
+                boxShadow: `0 4px 12px ${glowColor}`,
+                transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                letterSpacing: '0.02em',
+                outline: 'none',
             });
 
             const iconEl = document.createElement('span');
             iconEl.textContent = icon;
-            Object.assign(iconEl.style, { fontSize: '12px', lineHeight: '1', opacity: '0.9' });
+            Object.assign(iconEl.style, {
+                fontSize: '13px',
+                lineHeight: '1',
+                display: 'inline-flex',
+                alignItems: 'center',
+            });
 
             const labelEl = document.createElement('span');
             labelEl.textContent = label;
@@ -1758,24 +1799,24 @@
 
             btn.addEventListener('mouseenter', () => {
                 if (btn.disabled) return;
-                btn.style.transform = 'translateY(-1px)';
-                btn.style.boxShadow = `0 4px 14px ${glowColor}`;
-                btn.style.filter = 'brightness(1.1)';
+                btn.style.transform = 'translateY(-2px)';
+                btn.style.boxShadow = `0 6px 18px ${glowColor}`;
+                btn.style.filter = 'brightness(1.08)';
             });
             btn.addEventListener('mouseleave', () => {
                 btn.style.transform = 'translateY(0)';
-                btn.style.boxShadow = `0 2px 8px ${glowColor}`;
+                btn.style.boxShadow = `0 4px 12px ${glowColor}`;
                 btn.style.filter = 'brightness(1)';
             });
             btn.addEventListener('mousedown', () => {
                 if (btn.disabled) return;
                 btn.style.transform = 'translateY(1px)';
-                btn.style.filter = 'brightness(0.92)';
+                btn.style.filter = 'brightness(0.95)';
             });
             btn.addEventListener('mouseup', () => {
                 if (btn.disabled) return;
-                btn.style.transform = 'translateY(-1px)';
-                btn.style.filter = 'brightness(1.05)';
+                btn.style.transform = 'translateY(-2px)';
+                btn.style.filter = 'brightness(1.08)';
             });
 
             panel.appendChild(btn);
@@ -1783,22 +1824,25 @@
         };
 
         const passBtn = makePanelBtn(
-            'sj-auto-review-btn', '✓', '一键通过',
-            '#15803d', '#22c55e', 'rgba(34,197,94,0.4)'
+            'sj-auto-review-btn', '⚡', '一键通过',
+            'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            'rgba(16, 185, 129, 0.3)'
         );
         passBtn.title = '快捷键 Alt+A';
         passBtn.addEventListener('click', () => autoReviewRunFullFlow());
 
         const skipBtn = makePanelBtn(
-            'sj-skip-order-btn', '↷', '跳过此单',
-            '#92400e', '#f59e0b', 'rgba(245,158,11,0.4)'
+            'sj-skip-order-btn', '⏭', '跳过此单',
+            'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+            'rgba(245, 158, 11, 0.3)'
         );
         skipBtn.title = '取消占有当前订单并进入下一单';
         skipBtn.addEventListener('click', () => sjSkipCurrentOrder(skipBtn));
 
         const audioBtn = makePanelBtn(
-            'sj-open-recording-btn', '♫', '打开录音',
-            '#1e40af', '#3b82f6', 'rgba(59,130,246,0.4)'
+            'sj-open-recording-btn', '🎧', '打开录音',
+            'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+            'rgba(59, 130, 246, 0.3)'
         );
         audioBtn.title = '快速打开本单第一个录音';
         audioBtn.addEventListener('click', () => sjRecordingOpenFirst(true));
