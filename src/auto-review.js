@@ -658,6 +658,15 @@
         );
         passBtn.addEventListener('click', () => autoReviewRunFullFlow());
 
+        const skipBtn = makePanelBtn(
+            'sj-skip-order-btn',
+            '<span style="font-size:15px;margin-right:6px;">↷</span>跳过此单',
+            'linear-gradient(135deg,#f59e0b,#d97706)',
+            'linear-gradient(135deg,#d97706,#b45309)',
+            '取消占有当前订单并进入下一单'
+        );
+        skipBtn.addEventListener('click', () => sjSkipCurrentOrder(skipBtn));
+
         const audioBtn = makePanelBtn(
             'sj-open-recording-btn',
             '<span style="font-size:15px;margin-right:6px;">♫</span>打开录音',
@@ -981,5 +990,208 @@
             sjPrefetchJumping = false;
             console.error('[Prefetch] 跳转失败，已恢复单槽:', error);
             return false;
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 跳过当前订单：先确认取消占有成功，再消费单槽或领取下一单。
+    // ------------------------------------------------------------
+    const SJ_SKIP_PENDING_KEY = 'sj_skip_pending_v1';
+    const SJ_SKIP_PENDING_TTL_MS = 2 * 60 * 1000;
+    let sjSkipRunning = false;
+    let sjSkipAcquireRunning = false;
+
+    function sjReadSkipPending() {
+        const raw = localStorage.getItem(SJ_SKIP_PENDING_KEY);
+        if (!raw) return null;
+        try {
+            const pending = JSON.parse(raw);
+            if (!pending || !pending.createdAt || Date.now() - Number(pending.createdAt) > SJ_SKIP_PENDING_TTL_MS) {
+                localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+                return null;
+            }
+            return pending;
+        } catch (error) {
+            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+            return null;
+        }
+    }
+
+    function sjWriteSkipPending(pending) {
+        localStorage.setItem(SJ_SKIP_PENDING_KEY, JSON.stringify(pending));
+    }
+
+    function sjSkipIsVisible(element) {
+        if (!element || !element.isConnected) return false;
+        const style = getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    }
+
+    function sjFindCancelOccupyButton() {
+        return Array.from(document.querySelectorAll('button,.el-button,[role="button"]')).find((element) => {
+            if (element.id === 'sj-skip-order-btn') return false;
+            return element.textContent.replace(/\s+/g, '').includes('取消占有') && sjSkipIsVisible(element);
+        }) || null;
+    }
+
+    async function sjConfirmCancelOccupyDialog(timeoutMs = 3000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const wrappers = Array.from(document.querySelectorAll('.el-message-box__wrapper,.el-dialog__wrapper'));
+            const dialog = wrappers.find((element) => {
+                const text = element.textContent.replace(/\s+/g, '');
+                return sjSkipIsVisible(element) && (text.includes('取消占有') || text.includes('确认取消'));
+            });
+            if (dialog) {
+                const confirmBtn = Array.from(dialog.querySelectorAll('button')).find((button) => {
+                    const text = button.textContent.trim();
+                    return text === '确定' || text === '确认' || button.classList.contains('el-button--primary');
+                });
+                if (confirmBtn) {
+                    autoReviewClickEl(confirmBtn);
+                    return true;
+                }
+            }
+            await autoReviewSleep(50);
+        }
+        return false;
+    }
+
+    async function sjWaitForCancelOccupySuccess(currentOrderId, cancelButton, timeoutMs = 15000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const routeOrderId = sjGetCurrentOrderId();
+            if (routeOrderId !== currentOrderId) return true;
+            if (!cancelButton.isConnected) return true;
+
+            const successMessage = Array.from(document.querySelectorAll(
+                '.el-message--success,.el-notification.success,.el-notification--success'
+            )).find((element) => {
+                const text = element.textContent.replace(/\s+/g, '');
+                return sjSkipIsVisible(element) && (text.includes('取消') || text.includes('释放'));
+            });
+            if (successMessage) return true;
+            await autoReviewSleep(100);
+        }
+        throw new Error('等待网站确认取消占有超时');
+    }
+
+    function sjConsumeReadySlotForSkip(fromOrderId) {
+        const slot = sjReadPrefetchSlot();
+        if (!slot || slot.state !== 'ready' || slot.nextOrderId === String(fromOrderId)) return false;
+        sjWritePrefetchSlot({
+            ...slot,
+            state: 'consuming',
+            fromOrderId: String(fromOrderId),
+            consumedAt: Date.now()
+        });
+        localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+        autoReviewToast(`当前订单已释放，正在进入订单 ${slot.nextOrderId}...`);
+        location.assign('/order/review/' + slot.nextOrderId);
+        return true;
+    }
+
+    async function sjHandlePendingSkipNavigation() {
+        const pending = sjReadSkipPending();
+        if (!pending || sjSkipAcquireRunning) return false;
+
+        const currentOrderId = sjGetCurrentOrderId();
+        if (pending.state === 'releasing' && currentOrderId === String(pending.currentOrderId)) {
+            return false;
+        }
+        if (currentOrderId && currentOrderId !== String(pending.currentOrderId)) {
+            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+            return true;
+        }
+
+        if (sjConsumeReadySlotForSkip(pending.currentOrderId)) return true;
+        if (!pending.projectId) {
+            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+            autoReviewToast('当前订单已释放，但未读取到项目编号，请在项目列表手动点击“开始审单”。', true);
+            location.assign('/customer/project-order-review/table?customerid=285');
+            return false;
+        }
+
+        const req = typeof unsafeWindow !== 'undefined' && unsafeWindow.request || window.request;
+        if (!req || typeof req.common !== 'function') {
+            if (!location.pathname.includes('/customer/project-order-review/table')) {
+                location.assign('/customer/project-order-review/table?customerid=285');
+            }
+            return false;
+        }
+
+        sjSkipAcquireRunning = true;
+        sjWriteSkipPending({ ...pending, state: 'acquiring' });
+        try {
+            const response = await req.common('createAuditTask', { projectid: Number(pending.projectId) });
+            const nextOrderId = sjExtractPrefetchedOrderId(response);
+            if (!nextOrderId) throw new Error('开始审单请求没有返回订单号');
+            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+            autoReviewToast(`当前订单已释放，正在进入新订单 ${nextOrderId}...`);
+            location.assign('/order/review/' + nextOrderId);
+            return true;
+        } catch (error) {
+            console.error('[Skip] 获取下一单失败:', error);
+            sjWriteSkipPending({ ...pending, state: 'acquiring' });
+            if (!location.pathname.includes('/customer/project-order-review/table')) {
+                location.assign('/customer/project-order-review/table?customerid=285');
+            }
+            return false;
+        } finally {
+            sjSkipAcquireRunning = false;
+        }
+    }
+
+    async function sjSkipCurrentOrder(button) {
+        if (sjSkipRunning || autoReviewRunning) return;
+        const currentOrderId = sjGetCurrentOrderId();
+        const cancelButton = sjFindCancelOccupyButton();
+        if (!currentOrderId || !cancelButton) {
+            autoReviewToast('未找到网站的“取消占有”按钮，无法安全跳过。', true);
+            return;
+        }
+
+        const existingSlot = sjReadPrefetchSlot();
+        if (existingSlot && existingSlot.state !== 'ready') {
+            autoReviewToast('已有订单正在切换，请稍后再试。', true);
+            return;
+        }
+        const projectId = sjGetActiveProjectId();
+        if (!existingSlot && !projectId) {
+            autoReviewToast('尚未读取到项目编号，请等待页面加载完成后再跳过。', true);
+            return;
+        }
+        if (!window.confirm('确定跳过当前订单吗？插件会先取消占有，再进入下一单。')) return;
+
+        sjSkipRunning = true;
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<span style="font-size:15px;margin-right:6px;">…</span>正在释放';
+        }
+        const pending = {
+            state: 'releasing',
+            currentOrderId,
+            projectId: projectId ? String(projectId) : null,
+            createdAt: Date.now()
+        };
+        sjWriteSkipPending(pending);
+
+        try {
+            autoReviewToast('正在取消占有当前订单...');
+            autoReviewClickEl(cancelButton);
+            await sjConfirmCancelOccupyDialog();
+            await sjWaitForCancelOccupySuccess(currentOrderId, cancelButton);
+            sjWriteSkipPending({ ...pending, state: 'acquiring' });
+            await sjHandlePendingSkipNavigation();
+        } catch (error) {
+            console.error('[Skip] 跳过失败:', error);
+            localStorage.removeItem(SJ_SKIP_PENDING_KEY);
+            autoReviewToast('取消占有未确认成功，已停止跳转：' + error.message, true);
+        } finally {
+            sjSkipRunning = false;
+            if (button && button.isConnected) {
+                button.disabled = false;
+                button.innerHTML = '<span style="font-size:15px;margin-right:6px;">↷</span>跳过此单';
+            }
         }
     }

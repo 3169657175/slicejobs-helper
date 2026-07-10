@@ -1913,6 +1913,8 @@
 
     // 初始化入口（每次由 init 定时检查，无额外并发定时器）
     function autoReviewInit() {
+        // 取消占有后页面可能被网站带回列表；无论当前路由是什么，都继续完成下一单领取。
+        sjHandlePendingSkipNavigation();
         if (!location.pathname.startsWith('/order/review')) {
             const btn = document.getElementById('sj-auto-review-btn');
             if (btn) btn.remove();
