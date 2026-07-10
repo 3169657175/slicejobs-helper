@@ -585,97 +585,147 @@
         document.getElementById('sj-open-recording-btn')?.remove();
         document.getElementById('sj-open-audio-btn')?.remove();
 
+        // ── 面板容器 ──
         const panel = document.createElement('div');
         panel.id = 'sj-control-panel';
-        panel.style.position = 'fixed';
-        panel.style.top = '50%';
-        panel.style.right = '28px';
-        panel.style.transform = 'translateY(-50%)';
-        panel.style.zIndex = 999998;
-        panel.style.display = 'flex';
-        panel.style.flexDirection = 'column';
-        panel.style.gap = '8px';
-        panel.style.padding = '10px 12px 12px';
-        panel.style.minWidth = '150px';
-        panel.style.background = 'linear-gradient(180deg, rgba(15,23,42,.96), rgba(15,23,42,.92))';
-        panel.style.border = '1px solid rgba(148,163,184,.18)';
-        panel.style.borderRadius = '14px';
-        panel.style.boxShadow = '0 16px 36px rgba(15,23,42,.28)';
-        panel.style.backdropFilter = 'blur(10px)';
-        panel.style.userSelect = 'none';
+        Object.assign(panel.style, {
+            position: 'fixed',
+            top: '50%',
+            right: '16px',
+            transform: 'translateY(-50%)',
+            zIndex: 999998,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '5px',
+            padding: '10px 8px 10px',
+            width: '132px',
+            background: 'rgba(13, 17, 28, 0.88)',
+            border: '1px solid rgba(255,255,255,0.09)',
+            borderRadius: '10px',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04) inset',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            userSelect: 'none',
+            fontFamily: '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
+        });
 
+        // ── 标题栏 ──
         const header = document.createElement('div');
-        header.style.color = '#94a3b8';
-        header.style.fontSize = '12px';
-        header.style.fontWeight = '700';
-        header.style.lineHeight = '16px';
-        header.style.cursor = 'grab';
-        header.style.paddingLeft = '10px';
-        header.style.position = 'relative';
-        header.innerHTML = '<span style="position:absolute;left:0;top:5px;width:6px;height:6px;border-radius:999px;background:#10b981;box-shadow:0 0 8px rgba(16,185,129,.7);"></span>AI 审核辅助';
+        Object.assign(header.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            paddingBottom: '7px',
+            marginBottom: '1px',
+            borderBottom: '1px solid rgba(255,255,255,0.07)',
+            cursor: 'grab',
+        });
+
+        const dot = document.createElement('span');
+        Object.assign(dot.style, {
+            width: '5px', height: '5px',
+            borderRadius: '50%',
+            background: '#22c55e',
+            boxShadow: '0 0 5px rgba(34,197,94,0.9)',
+            flexShrink: '0',
+        });
+
+        const titleText = document.createElement('span');
+        titleText.textContent = 'AI 审核辅助';
+        Object.assign(titleText.style, {
+            color: 'rgba(255,255,255,0.4)',
+            fontSize: '10px',
+            fontWeight: '600',
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+        });
+
+        header.appendChild(dot);
+        header.appendChild(titleText);
         panel.appendChild(header);
 
-        const makePanelBtn = (id, html, bg, hoverBg, title) => {
-            const panelBtn = document.createElement('button');
-            panelBtn.id = id;
-            panelBtn.innerHTML = html;
-            panelBtn.title = title || '';
-            panelBtn.style.width = '100%';
-            panelBtn.style.height = '34px';
-            panelBtn.style.border = 'none';
-            panelBtn.style.borderRadius = '9px';
-            panelBtn.style.color = '#fff';
-            panelBtn.style.fontSize = '14px';
-            panelBtn.style.fontWeight = '800';
-            panelBtn.style.cursor = 'pointer';
-            panelBtn.style.display = 'flex';
-            panelBtn.style.alignItems = 'center';
-            panelBtn.style.justifyContent = 'center';
-            panelBtn.style.background = bg;
-            panelBtn.style.boxShadow = '0 6px 14px rgba(0,0,0,.14)';
-            panelBtn.style.transition = 'transform .16s ease, background .16s ease, box-shadow .16s ease';
-            panelBtn.addEventListener('mouseenter', () => {
-                if (panelBtn.disabled) return;
-                panelBtn.style.transform = 'translateY(-1px)';
-                panelBtn.style.background = hoverBg;
-                panelBtn.style.boxShadow = '0 8px 18px rgba(0,0,0,.22)';
+        // ── 按钮工厂 ──
+        const makePanelBtn = (id, icon, label, colorDark, colorLight, glowColor) => {
+            const btn = document.createElement('button');
+            btn.id = id;
+            btn.title = '';
+            Object.assign(btn.style, {
+                width: '100%',
+                height: '34px',
+                border: 'none',
+                borderRadius: '7px',
+                color: '#fff',
+                fontSize: '12.5px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                background: `linear-gradient(155deg, ${colorLight}, ${colorDark})`,
+                boxShadow: `0 2px 8px ${glowColor}`,
+                transition: 'transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease',
+                letterSpacing: '0.01em',
             });
-            panelBtn.addEventListener('mouseleave', () => {
-                panelBtn.style.transform = 'translateY(0)';
-                panelBtn.style.background = bg;
-                panelBtn.style.boxShadow = '0 6px 14px rgba(0,0,0,.14)';
+
+            const iconEl = document.createElement('span');
+            iconEl.textContent = icon;
+            Object.assign(iconEl.style, { fontSize: '12px', lineHeight: '1', opacity: '0.9' });
+
+            const labelEl = document.createElement('span');
+            labelEl.textContent = label;
+
+            btn.appendChild(iconEl);
+            btn.appendChild(labelEl);
+
+            btn.addEventListener('mouseenter', () => {
+                if (btn.disabled) return;
+                btn.style.transform = 'translateY(-1px)';
+                btn.style.boxShadow = `0 4px 14px ${glowColor}`;
+                btn.style.filter = 'brightness(1.1)';
             });
-            panel.appendChild(panelBtn);
-            return panelBtn;
+            btn.addEventListener('mouseleave', () => {
+                btn.style.transform = 'translateY(0)';
+                btn.style.boxShadow = `0 2px 8px ${glowColor}`;
+                btn.style.filter = 'brightness(1)';
+            });
+            btn.addEventListener('mousedown', () => {
+                if (btn.disabled) return;
+                btn.style.transform = 'translateY(1px)';
+                btn.style.filter = 'brightness(0.92)';
+            });
+            btn.addEventListener('mouseup', () => {
+                if (btn.disabled) return;
+                btn.style.transform = 'translateY(-1px)';
+                btn.style.filter = 'brightness(1.05)';
+            });
+
+            panel.appendChild(btn);
+            return btn;
         };
 
         const passBtn = makePanelBtn(
-            'sj-auto-review-btn',
-            '<span style="font-size:15px;margin-right:6px;">✓</span>一键通过',
-            'linear-gradient(135deg,#10b981,#059669)',
-            'linear-gradient(135deg,#059669,#047857)',
-            '快捷键 Alt+A'
+            'sj-auto-review-btn', '✓', '一键通过',
+            '#15803d', '#22c55e', 'rgba(34,197,94,0.4)'
         );
+        passBtn.title = '快捷键 Alt+A';
         passBtn.addEventListener('click', () => autoReviewRunFullFlow());
 
         const skipBtn = makePanelBtn(
-            'sj-skip-order-btn',
-            '<span style="font-size:15px;margin-right:6px;">↷</span>跳过此单',
-            'linear-gradient(135deg,#f59e0b,#d97706)',
-            'linear-gradient(135deg,#d97706,#b45309)',
-            '取消占有当前订单并进入下一单'
+            'sj-skip-order-btn', '↷', '跳过此单',
+            '#92400e', '#f59e0b', 'rgba(245,158,11,0.4)'
         );
+        skipBtn.title = '取消占有当前订单并进入下一单';
         skipBtn.addEventListener('click', () => sjSkipCurrentOrder(skipBtn));
 
         const audioBtn = makePanelBtn(
-            'sj-open-recording-btn',
-            '<span style="font-size:15px;margin-right:6px;">♫</span>打开录音',
-            'linear-gradient(135deg,#3b82f6,#2563eb)',
-            'linear-gradient(135deg,#2563eb,#1d4ed8)',
-            '快速打开本单第一个录音'
+            'sj-open-recording-btn', '♫', '打开录音',
+            '#1e40af', '#3b82f6', 'rgba(59,130,246,0.4)'
         );
+        audioBtn.title = '快速打开本单第一个录音';
         audioBtn.addEventListener('click', () => sjRecordingOpenFirst(true));
 
+        // ── 拖拽逻辑 ──
         let isDragging = false;
         let startX = 0;
         let startY = 0;
