@@ -149,10 +149,108 @@
         });
     }
 
+    function autoReviewIsVisibleClickable(el) {
+        if (!el || !el.isConnected || el.disabled) return false;
+        const style = getComputedStyle(el);
+        return !!style && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none';
+    }
+
+    function autoReviewGetVisibleSuccessDialog() {
+        const dialogs = Array.from(document.querySelectorAll('.el-dialog__wrapper, .el-message-box__wrapper'));
+        return dialogs.find((dialog) => {
+            const style = getComputedStyle(dialog);
+            if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+            const text = (dialog.textContent || '').replace(/\s+/g, '');
+            return text.includes('审核成功') || text.includes('已确认订单结果');
+        }) || null;
+    }
+
     function autoReviewGetNextOrderButton() {
-        return Array.from(document.querySelectorAll('button')).find(
-            (b) => b.textContent.trim() === '审核下一单'
-        );
+        const successDialog = autoReviewGetVisibleSuccessDialog();
+        if (!successDialog) return null;
+        return Array.from(successDialog.querySelectorAll('button')).find(
+            (button) => button.textContent.trim() === '审核下一单' && autoReviewIsVisibleClickable(button)
+        ) || null;
+    }
+
+    function autoReviewWaitForNextOrderButton(timeoutMs = 120000) {
+        const immediate = autoReviewGetNextOrderButton();
+        if (immediate) {
+            immediate.dataset.sjAutoReviewWaitMs = '0';
+            return Promise.resolve(immediate);
+        }
+
+        return new Promise((resolve, reject) => {
+            const startedAt = Date.now();
+            let settled = false;
+            let observer = null;
+            let intervalId = null;
+            let timeoutId = null;
+
+            const cleanup = () => {
+                if (observer) observer.disconnect();
+                if (intervalId) clearInterval(intervalId);
+                if (timeoutId) clearTimeout(timeoutId);
+            };
+            const finish = (button) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                button.dataset.sjAutoReviewWaitMs = String(Date.now() - startedAt);
+                resolve(button);
+            };
+            const check = () => {
+                const button = autoReviewGetNextOrderButton();
+                if (button) finish(button);
+            };
+
+            observer = new MutationObserver(check);
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+                attributes: true,
+                attributeFilter: ['class', 'style', 'disabled']
+            });
+            // 轮询作为 Vue/Element UI 某些非 DOM 变更场景的兜底，主要等待仍由弹窗事件驱动。
+            intervalId = setInterval(check, 250);
+            timeoutId = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                reject(new Error('等待“审核成功”弹窗超时'));
+            }, timeoutMs);
+            check();
+        });
+    }
+
+    function autoReviewHasVisibleLoadingMask() {
+        return Array.from(document.querySelectorAll('.el-loading-mask')).some((mask) => {
+            const style = getComputedStyle(mask);
+            return !!style && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+    }
+
+    async function autoReviewWaitForNextOrderReady(initialButton, stableMs = 350, maxWaitMs = 8000) {
+        let button = initialButton;
+        const startedAt = Date.now();
+        let stableSince = null;
+        while (Date.now() - startedAt <= maxWaitMs) {
+            const currentButton = autoReviewGetNextOrderButton();
+            if (currentButton) button = currentButton;
+            const ready = autoReviewIsVisibleClickable(button) && !autoReviewHasVisibleLoadingMask();
+            if (ready) {
+                if (stableSince === null) stableSince = Date.now();
+                if (Date.now() - stableSince >= stableMs) {
+                    button.dataset.sjAutoReviewStableMs = String(Date.now() - startedAt);
+                    return button;
+                }
+            } else {
+                stableSince = null;
+            }
+            await autoReviewSleep(50);
+        }
+        throw new Error('“审核下一单”按钮长时间未进入稳定可点击状态');
     }
 
     // 右上角提示
@@ -261,25 +359,23 @@
             }
             autoReviewClickEl(confirmBtn);
 
-            // 等待跳转下一单按钮出现（极速轮询，最大等待4秒）
-            let nextBtn = null;
-            for (let i = 0; i < 200; i++) { // 200 * 20ms = 4s
-                nextBtn = autoReviewGetNextOrderButton();
-                if (nextBtn) break;
-                await autoReviewSleep(20);
-            }
-
-            // ③ 去掉固定 400ms，检测到按钮存在直接跳转
-            nextBtn = autoReviewGetNextOrderButton();
-            if (nextBtn) {
-                autoReviewToast('审核已提交，正在跳转下一单...');
-                autoReviewClickEl(nextBtn);
-            } else {
-                autoReviewToast('审核可能已提交，但未找到"审核下一单"按钮，请手动确认', true);
-            }
+            autoReviewToast('审核已提交，正在等待“审核成功”弹窗...');
+            const detectedBtn = await autoReviewWaitForNextOrderButton();
+            const waitMs = Number(detectedBtn.dataset.sjAutoReviewWaitMs || 0);
+            const nextBtn = await autoReviewWaitForNextOrderReady(detectedBtn);
+            const stableMs = Number(nextBtn.dataset.sjAutoReviewStableMs || 0);
+            const waitText = waitMs > 0 ? `（弹窗等待 ${(waitMs / 1000).toFixed(1)} 秒）` : '';
+            console.log(`[AutoReview] Success dialog detected after ${waitMs}ms; button stabilized for ${stableMs}ms; clicking next order now.`);
+            autoReviewToast(`已检测到审核成功弹窗${waitText}，按钮已稳定，正在进入下一单...`);
+            autoReviewClickEl(nextBtn);
         } catch (err) {
             console.error(err);
-            autoReviewToast('执行出错: ' + err.message, true);
+            const message = err && err.message || String(err);
+            if (message.includes('等待“审核成功”弹窗超时')) {
+                autoReviewToast('等待审核成功弹窗超过2分钟，插件未重复提交；弹窗出现后请手动点击下一单', true);
+            } else {
+                autoReviewToast('执行出错: ' + message, true);
+            }
         } finally {
             // ① 无论成功失败，均释放锁并还原按钮
             autoReviewRunning = false;
