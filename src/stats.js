@@ -344,7 +344,16 @@
                     }
                     const { dateStr, hourlyStats, hourlyReworkStats, totalCount, totalRework, totalAudits, speedPerHour, activeHours, observedCount, rejectedCount } = currentDayStats;
                     const target = getTargetForDate(dateStr);
-                    const displayHours = [9, 10, 11, 13, 14, 15, 16, 17];
+                    const coreHours = [9, 10, 11, 13, 14, 15, 16, 17];
+                    const extraHours = [];
+                    for (let h = 0; h < 24; h++) {
+                        if ((hourlyStats[h] || 0) > 0 || (hourlyReworkStats[h] || 0) > 0) {
+                            if (!coreHours.includes(h)) {
+                                extraHours.push(h);
+                            }
+                        }
+                    }
+                    const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
 
                     let csvContent = "\ufeff时间段,初审数量 (单),复审数量 (单),时间段备注\n";
                     displayHours.forEach(hour => {
@@ -698,8 +707,18 @@
         const nowHour = new Date().getHours();
         const nowMin = new Date().getMinutes();
 
-        // 核心展示时段（跳过12点午休，合计8个显示时段）
-        const displayHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        // 自动识别在家办公模式 (Home-office Mode)
+        const coreHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        const extraHours = [];
+        for (let h = 0; h < 24; h++) {
+            if (hourlyStats[h] > 0 || hourlyReworkStats[h] > 0 || yesterdayHourlyStats[h] > 0 || yesterdayHourlyReworkStats[h] > 0) {
+                if (!coreHours.includes(h)) {
+                    extraHours.push(h);
+                }
+            }
+        }
+        const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
+        const isHomeOfficeMode = extraHours.length > 0;
         let totalFirst = 0;
         let totalRework = 0;
         let activeHours = 0;
@@ -965,8 +984,19 @@
             rejectedHtml = `<span style="color: #ef4444; font-size: 10.5px; font-weight: 600; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 4px; padding: 1px 5px; display: inline-flex; align-items: center; gap: 2px; cursor: help; vertical-align: middle; margin-bottom: 2px;" title="该日期曾观测到过共 ${observedIds.length} 单审核，现缺失了 ${rejectedCount} 单，可能已被审核管理员退单">⚠️ 退单: ${rejectedCount}</span>`;
         }
 
+        let homeOfficeBadge = '';
+        if (isHomeOfficeMode) {
+            homeOfficeBadge = `
+                <div class="sj-home-office-banner" style="display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; color: #10b981; font-size: 11.5px; font-weight: 600; text-align: left; width: 100%; box-sizing: border-box;">
+                    <span style="font-size: 13px;">🏠</span>
+                    <span>已自动识别：<strong>在家办公模式</strong>（检测到非核心时段数据，已动态显示全天 24 小时所有时段的审核数据）</span>
+                </div>
+            `;
+        }
+
         const content = document.getElementById('sj-stats-content');
         content.innerHTML = `
+            ${homeOfficeBadge}
             <!-- 数字汇总指标卡片 -->
             <div class="sj-stats-grid">
                 <div class="sj-stats-box sj-box-blue" style="justify-content: space-between; height: 130px; padding: 12px; position: relative;">
@@ -1116,7 +1146,7 @@
 
         // 异步渲染 ECharts 堆叠柱状趋势图 (v3.6)
         setTimeout(() => {
-            initEChart(hourlyStats, hourlyReworkStats, yesterdayHourlyStats, yesterdayHourlyReworkStats);
+            initEChart(displayHours, hourlyStats, hourlyReworkStats, yesterdayHourlyStats, yesterdayHourlyReworkStats);
         }, 50);
     };    // 渲染近 7 日周分析页面 (v1.8新增, v3.6 升级区分初审复审)
     const renderWeeklyStats = (records) => {
@@ -1173,8 +1203,23 @@
             }
         });
 
-        // 3. 计算活跃工时
-        const displayHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        // 自动识别在家办公模式 (Home-office Mode) - 周趋势
+        const coreHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        const extraHours = [];
+        for (let h = 0; h < 24; h++) {
+            let hourHasData = false;
+            dateList.forEach(dateStr => {
+                const dayInfo = weeklyData[dateStr];
+                if (dayInfo.hourlyStats[h] > 0 || dayInfo.hourlyReworkStats[h] > 0) {
+                    hourHasData = true;
+                }
+            });
+            if (hourHasData && !coreHours.includes(h)) {
+                extraHours.push(h);
+            }
+        }
+        const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
+        const isWeeklyHomeOfficeMode = extraHours.length > 0;
         let totalWeeklyFirst = 0;
         let totalWeeklyRework = 0;
         let totalWeeklyActiveHours = 0;
@@ -1222,8 +1267,19 @@
         };
 
         // 5. 渲染周指标 HTML
+        let homeOfficeBadge = '';
+        if (isWeeklyHomeOfficeMode) {
+            homeOfficeBadge = `
+                <div class="sj-home-office-banner" style="display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; color: #10b981; font-size: 11.5px; font-weight: 600; text-align: left; width: 100%; box-sizing: border-box;">
+                    <span style="font-size: 13px;">🏠</span>
+                    <span>已自动识别：<strong>在家办公模式</strong>（已动态统计近7日所有的非核心活动工时数据）</span>
+                </div>
+            `;
+        }
+
         const content = document.getElementById('sj-stats-content');
         content.innerHTML = `
+            ${homeOfficeBadge}
             <!-- 数字汇总指标卡片 -->
             <div class="sj-stats-grid">
                 <div class="sj-stats-box sj-box-blue" style="justify-content: space-between; height: 110px; padding: 16px 12px;">
@@ -1375,33 +1431,15 @@
             );
         }, 50);
     };    // 初始化 ECharts 堆叠柱状图 (v3.6 新增区分初审复审)
-    const initEChart = (hourlyData, hourlyReworkData = [], yesterdayHourlyData = [], yesterdayHourlyReworkData = []) => {
+    const initEChart = (displayHours, hourlyData, hourlyReworkData = [], yesterdayHourlyData = [], yesterdayHourlyReworkData = []) => {
         const chartDom = document.getElementById('sj-stats-chart-div');
         if (!chartDom) return;
 
-        const xData = ['09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+        const xData = displayHours.map(h => `${String(h).padStart(2, '0')}:00`);
 
-        const firstRoundSeries = [
-            hourlyData[9] || 0,
-            hourlyData[10] || 0,
-            hourlyData[11] || 0,
-            hourlyData[13] || 0,
-            hourlyData[14] || 0,
-            hourlyData[15] || 0,
-            hourlyData[16] || 0,
-            hourlyData[17] || 0
-        ];
+        const firstRoundSeries = displayHours.map(h => hourlyData[h] || 0);
 
-        const reworkSeries = [
-            (hourlyReworkData && hourlyReworkData[9]) || 0,
-            (hourlyReworkData && hourlyReworkData[10]) || 0,
-            (hourlyReworkData && hourlyReworkData[11]) || 0,
-            (hourlyReworkData && hourlyReworkData[13]) || 0,
-            (hourlyReworkData && hourlyReworkData[14]) || 0,
-            (hourlyReworkData && hourlyReworkData[15]) || 0,
-            (hourlyReworkData && hourlyReworkData[16]) || 0,
-            (hourlyReworkData && hourlyReworkData[17]) || 0
-        ];
+        const reworkSeries = displayHours.map(h => (hourlyReworkData && hourlyReworkData[h]) || 0);
 
         const totalSeries = firstRoundSeries.map((val, idx) => val + reworkSeries[idx]);
         const maxVal = Math.max(...totalSeries);
@@ -1410,16 +1448,7 @@
         let yesterdaySeriesData = [];
         let hasYesterdayData = yesterdayHourlyData.length > 0;
         if (hasYesterdayData) {
-            yesterdaySeriesData = [
-                (yesterdayHourlyData[9] || 0) + (yesterdayHourlyReworkData[9] || 0),
-                (yesterdayHourlyData[10] || 0) + (yesterdayHourlyReworkData[10] || 0),
-                (yesterdayHourlyData[11] || 0) + (yesterdayHourlyReworkData[11] || 0),
-                (yesterdayHourlyData[13] || 0) + (yesterdayHourlyReworkData[13] || 0),
-                (yesterdayHourlyData[14] || 0) + (yesterdayHourlyReworkData[14] || 0),
-                (yesterdayHourlyData[15] || 0) + (yesterdayHourlyReworkData[15] || 0),
-                (yesterdayHourlyData[16] || 0) + (yesterdayHourlyReworkData[16] || 0),
-                (yesterdayHourlyData[17] || 0) + (yesterdayHourlyReworkData[17] || 0)
-            ];
+            yesterdaySeriesData = displayHours.map(h => (yesterdayHourlyData[h] || 0) + (yesterdayHourlyReworkData[h] || 0));
         }
 
         chartInstance = echarts.init(chartDom, 'dark', { renderer: 'canvas' });
@@ -1440,12 +1469,15 @@
                 },
                 formatter: function (params) {
                     let timeLabel = params[0].name;
-                    if (timeLabel === '09:00') {
+                    const h = parseInt(timeLabel.split(':')[0], 10);
+                    if (h === 9) {
                         timeLabel = '09:00 (含8点提前打卡数)';
-                    } else if (timeLabel === '11:00') {
+                    } else if (h === 11) {
                         timeLabel = '11:00 (含12点午休量)';
-                    } else if (timeLabel === '17:00') {
+                    } else if (h === 17) {
                         timeLabel = '17:00 (含18点下班尾款数)';
+                    } else {
+                        timeLabel = `${String(h).padStart(2, '0')}:00 - ${String(h).padStart(2, '0')}:59`;
                     }
 
                     let firstVal = 0;

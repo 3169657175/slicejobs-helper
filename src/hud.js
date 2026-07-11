@@ -1,4 +1,4 @@
-﻿    let globalTodayRecords = [];
+    let globalTodayRecords = [];
 
     // 更新悬浮UI状态（迷你HUD / 经典悬浮球）(v2.8)
     const updateFloatingUI = (records) => {
@@ -31,7 +31,16 @@
             }
         });
 
-        const displayHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        const coreHours = [9, 10, 11, 13, 14, 15, 16, 17];
+        const extraHours = [];
+        for (let h = 0; h < 24; h++) {
+            if (hourlyStats[h] > 0 || hourlyReworkStats[h] > 0) {
+                if (!coreHours.includes(h)) {
+                    extraHours.push(h);
+                }
+            }
+        }
+        const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
         let todayFirstRound = 0;
         let todayRework = 0;
         // 统计全天所有24小时的总初审和总复审量，防止遗漏排班时段外的加班审核 (v3.6.2)
