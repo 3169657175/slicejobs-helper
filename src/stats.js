@@ -718,7 +718,7 @@
             }
         }
         const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
-        const isHomeOfficeMode = extraHours.length > 0;
+        const isHomeOfficeMode = extraHours.filter(h => h !== 12).length > 0;
         let totalFirst = 0;
         let totalRework = 0;
         let activeHours = 0;
@@ -1219,7 +1219,7 @@
             }
         }
         const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
-        const isWeeklyHomeOfficeMode = extraHours.length > 0;
+        const isWeeklyHomeOfficeMode = extraHours.filter(h => h !== 12).length > 0;
         let totalWeeklyFirst = 0;
         let totalWeeklyRework = 0;
         let totalWeeklyActiveHours = 0;
