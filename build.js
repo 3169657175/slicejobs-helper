@@ -19,6 +19,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const vm   = require('vm');
 
 const SRC  = path.join(__dirname, 'src');
 const DIST = path.join(__dirname, 'dist');
@@ -70,6 +71,10 @@ function build() {
     const finalOutput = process.env.VERSION
         ? output.replace(/(@version\s+)[\d.]+/, `$1${version}`)
         : output;
+
+    // 构建成功必须同时保证最终油猴脚本可以被 JavaScript 引擎解析。
+    // 避免编码损坏或引号缺失时仍然生成一个“看似成功”的不可运行文件。
+    new vm.Script(finalOutput, { filename: 'dist/slicejobs.user.js' });
 
     const outPath = path.join(DIST, 'slicejobs.user.js');
     fs.writeFileSync(outPath, finalOutput, 'utf8');

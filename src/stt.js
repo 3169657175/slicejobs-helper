@@ -1922,6 +1922,8 @@
             if (openBtn) openBtn.remove();
             const controlPanel = document.getElementById('sj-control-panel');
             if (controlPanel) controlPanel.remove();
+            const skipBtn = document.getElementById('sj-skip-order-btn');
+            if (skipBtn) skipBtn.remove();
             sjRecordingAutoOpenOrderKey = '';
             sttCurrentOrderTranscripts = {};
             sttLastLocationHref = null;

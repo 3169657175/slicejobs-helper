@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.8
+// @version      3.9.9
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -1658,198 +1658,312 @@
 
     // UI sync: replace separate floating buttons with the draggable helper panel used by dist.
     function autoReviewCreatePanel() {
-        if (!document.body || document.getElementById('sj-control-panel')) return;
+        if (!document.body) return;
+        if (document.getElementById('sj-control-panel') && document.getElementById('sj-skip-order-btn')) return;
+        document.getElementById('sj-control-panel')?.remove();
         document.getElementById('sj-auto-review-btn')?.remove();
         document.getElementById('sj-open-recording-btn')?.remove();
         document.getElementById('sj-open-audio-btn')?.remove();
         document.getElementById('sj-skip-order-btn')?.remove();
 
+        // ── 注入动画样式 ──
         if (!document.getElementById('sj-panel-styles')) {
             const style = document.createElement('style');
             style.id = 'sj-panel-styles';
             style.textContent = `
                 @keyframes sj-pulse {
-                    0%   { box-shadow: 0 0 0 0   rgba(16,185,129,.6); }
-                    70%  { box-shadow: 0 0 0 8px rgba(16,185,129,0);  }
-                    100% { box-shadow: 0 0 0 0   rgba(16,185,129,0);  }
+                    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+                    70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
                 }
-                .sj-pulse-dot { animation: sj-pulse 2s infinite; }
-                .sj-panel-btn { position: relative; overflow: hidden; }
+                .sj-pulse-dot {
+                    animation: sj-pulse 2s infinite;
+                }
+                .sj-panel-btn {
+                    position: relative;
+                    overflow: hidden;
+                }
                 .sj-panel-btn::after {
-                    content: ''; position: absolute; inset: 0;
-                    background: linear-gradient(rgba(255,255,255,.15), rgba(255,255,255,0));
-                    opacity: 0; transition: opacity .2s; pointer-events: none;
+                    content: '';
+                    position: absolute;
+                    top: 0; left: 0; width: 100%; height: 100%;
+                    background: linear-gradient(rgba(255,255,255,0.15), rgba(255,255,255,0));
+                    opacity: 0;
+                    transition: opacity 0.2s;
+                    pointer-events: none;
                 }
-                .sj-panel-btn:hover::after { opacity: 1; }
+                .sj-panel-btn:hover::after {
+                    opacity: 1;
+                }
             `;
             document.head.appendChild(style);
         }
 
+        // ── 面板容器 ──
         const panel = document.createElement('div');
         panel.id = 'sj-control-panel';
         Object.assign(panel.style, {
-            position: 'fixed', top: '50%', right: '20px',
-            transform: 'translateY(-50%)', zIndex: 999998,
-            display: 'flex', flexDirection: 'column', gap: '8px',
-            padding: '12px', width: '142px',
-            background: 'linear-gradient(135deg,rgba(24,28,41,.95) 0%,rgba(14,17,24,.98) 100%)',
-            border: '1px solid rgba(255,255,255,.08)', borderRadius: '14px',
-            boxShadow: '0 20px 40px rgba(0,0,0,.35),inset 0 1px 1px rgba(255,255,255,.1)',
-            backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+            position: 'fixed',
+            top: '50%',
+            right: '70px',
+            transform: 'translateY(-50%)',
+            zIndex: 999998,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '12px',
+            width: '142px',
+            background: 'linear-gradient(135deg, rgba(24, 28, 41, 0.95) 0%, rgba(14, 17, 24, 0.98) 100%)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius: '14px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.35), inset 0 1px 1px rgba(255,255,255,0.1)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
             userSelect: 'none',
-            fontFamily: '-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif',
+            fontFamily: '-apple-system, "SF Pro Text", "SF Pro Icons", "PingFang SC", "Microsoft YaHei", sans-serif',
+            transition: 'border-color 0.3s, box-shadow 0.3s',
         });
 
+        // ── 标题栏 ──
         const header = document.createElement('div');
         Object.assign(header.style, {
-            display: 'flex', alignItems: 'center', gap: '6px',
-            paddingBottom: '8px', marginBottom: '2px',
-            borderBottom: '1px solid rgba(255,255,255,.08)', cursor: 'grab',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            paddingBottom: '8px',
+            marginBottom: '2px',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            cursor: 'grab',
         });
+
         const dot = document.createElement('span');
         dot.className = 'sj-pulse-dot';
-        Object.assign(dot.style, { width:'6px', height:'6px', borderRadius:'50%', background:'#10b981', flexShrink:'0' });
+        Object.assign(dot.style, {
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            background: '#10b981',
+            flexShrink: '0',
+        });
+
         const titleText = document.createElement('span');
-        titleText.textContent = 'AI 瀹℃牳鍔╂墜';
-        Object.assign(titleText.style, { color:'#e2e8f0', fontSize:'11px', fontWeight:'600', letterSpacing:'.04em' });
+        titleText.textContent = 'AI 审核助手';
+        Object.assign(titleText.style, {
+            color: '#e2e8f0',
+            fontSize: '11px',
+            fontWeight: '600',
+            letterSpacing: '0.04em',
+        });
+
         header.appendChild(dot);
         header.appendChild(titleText);
         panel.appendChild(header);
 
-        const makePanelBtn = (id, icon, label, bg, glow) => {
+        // ── 按钮工厂 ──
+        const makePanelBtn = (id, icon, label, bgGradient, glowColor) => {
             const btn = document.createElement('button');
-            btn.id = id; btn.className = 'sj-panel-btn';
+            btn.id = id;
+            btn.className = 'sj-panel-btn';
+            btn.title = '';
             Object.assign(btn.style, {
-                width:'100%', height:'36px', border:'none', borderRadius:'8px',
-                color:'#fff', fontSize:'13px', fontWeight:'600', cursor:'pointer',
-                display:'flex', alignItems:'center', justifyContent:'center', gap:'6px',
-                background: bg, boxShadow: `0 4px 12px ${glow}`,
-                transition:'all .15s cubic-bezier(.4,0,.2,1)', letterSpacing:'.02em', outline:'none',
+                width: '100%',
+                height: '36px',
+                border: 'none',
+                borderRadius: '8px',
+                color: '#ffffff',
+                fontSize: '13px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                background: bgGradient,
+                boxShadow: `0 4px 12px ${glowColor}`,
+                transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                letterSpacing: '0.02em',
+                outline: 'none',
             });
-            const ic = document.createElement('span');
-            ic.textContent = icon;
-            Object.assign(ic.style, { fontSize:'13px', lineHeight:'1', display:'inline-flex', alignItems:'center' });
-            const lb = document.createElement('span');
-            lb.textContent = label;
-            btn.appendChild(ic); btn.appendChild(lb);
+
+            const iconEl = document.createElement('span');
+            iconEl.textContent = icon;
+            Object.assign(iconEl.style, {
+                fontSize: '13px',
+                lineHeight: '1',
+                display: 'inline-flex',
+                alignItems: 'center',
+            });
+
+            const labelEl = document.createElement('span');
+            labelEl.textContent = label;
+
+            btn.appendChild(iconEl);
+            btn.appendChild(labelEl);
+
             btn.addEventListener('mouseenter', () => {
                 if (btn.disabled) return;
                 btn.style.transform = 'translateY(-2px)';
-                btn.style.boxShadow = `0 6px 18px ${glow}`;
+                btn.style.boxShadow = `0 6px 18px ${glowColor}`;
                 btn.style.filter = 'brightness(1.08)';
             });
             btn.addEventListener('mouseleave', () => {
                 btn.style.transform = 'translateY(0)';
-                btn.style.boxShadow = `0 4px 12px ${glow}`;
+                btn.style.boxShadow = `0 4px 12px ${glowColor}`;
                 btn.style.filter = 'brightness(1)';
             });
-            btn.addEventListener('mousedown', () => { if (btn.disabled) return; btn.style.transform = 'translateY(1px)'; btn.style.filter = 'brightness(.95)'; });
-            btn.addEventListener('mouseup',   () => { if (btn.disabled) return; btn.style.transform = 'translateY(-2px)'; btn.style.filter = 'brightness(1.08)'; });
+            btn.addEventListener('mousedown', () => {
+                if (btn.disabled) return;
+                btn.style.transform = 'translateY(1px)';
+                btn.style.filter = 'brightness(0.95)';
+            });
+            btn.addEventListener('mouseup', () => {
+                if (btn.disabled) return;
+                btn.style.transform = 'translateY(-2px)';
+                btn.style.filter = 'brightness(1.08)';
+            });
+
             panel.appendChild(btn);
             return btn;
         };
 
-        const passBtn = makePanelBtn('sj-auto-review-btn','鈿?,'涓€閿€氳繃',
-            'linear-gradient(135deg,#10b981 0%,#059669 100%)','rgba(16,185,129,.3)');
-        passBtn.title = '蹇嵎閿?Alt+A';
+        const passBtn = makePanelBtn(
+            'sj-auto-review-btn', '⚡', '一键通过',
+            'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            'rgba(16, 185, 129, 0.3)'
+        );
+        passBtn.title = '快捷键 Alt+A';
         passBtn.addEventListener('click', () => autoReviewRunFullFlow());
 
-        const audioBtn = makePanelBtn('sj-open-recording-btn','馃帶','鎵撳紑褰曢煶',
-            'linear-gradient(135deg,#3b82f6 0%,#2563eb 100%)','rgba(59,130,246,.3)');
-        audioBtn.title = '蹇€熸墦寮€鏈崟绗竴涓綍闊?;
+        const audioBtn = makePanelBtn(
+            'sj-open-recording-btn', '🎧', '打开录音',
+            'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+            'rgba(59, 130, 246, 0.3)'
+        );
+        audioBtn.title = '快速打开本单第一个录音';
         audioBtn.addEventListener('click', () => sjRecordingOpenFirst(true));
 
-        // 鈹€鈹€ 鐙珛璺宠繃鎸夐挳锛堢珫鎺掓爣绛撅紝绱ц创涓婚潰鏉垮乏渚э級 鈹€鈹€
-        const skipWrap = document.createElement('div');
-        skipWrap.id = 'sj-skip-order-btn';
-        Object.assign(skipWrap.style, {
-            position: 'fixed', top: '50%', right: '174px',
-            transform: 'translateY(-50%)', zIndex: 999997,
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: '3px',
-            width: '28px', padding: '10px 0',
-            background: 'linear-gradient(160deg,#f59e0b 0%,#b45309 100%)',
-            border: '1px solid rgba(255,255,255,.12)', borderRadius: '10px',
-            boxShadow: '0 8px 24px rgba(245,158,11,.3),inset 0 1px 1px rgba(255,255,255,.18)',
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'all .15s cubic-bezier(.4,0,.2,1)',
-            fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei",sans-serif',
+        // ── 独立跳过按钮：固定在主面板右侧 ──
+        const skipBtn = document.createElement('button');
+        skipBtn.id = 'sj-skip-order-btn';
+        skipBtn.type = 'button';
+        skipBtn.textContent = '⏭ 跳过此单';
+        skipBtn.title = '取消占有当前订单并进入已缓存的下一单';
+        Object.assign(skipBtn.style, {
+            position: 'fixed',
+            top: '50%',
+            right: '20px',
+            transform: 'translateY(-50%)',
+            zIndex: 999998,
+            width: '40px',
+            minHeight: '104px',
+            padding: '10px 8px',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '12px',
+            color: '#ffffff',
+            background: 'linear-gradient(160deg, #f59e0b 0%, #b45309 100%)',
+            boxShadow: '0 8px 24px rgba(245,158,11,0.34), inset 0 1px 1px rgba(255,255,255,0.18)',
+            cursor: 'pointer',
+            writingMode: 'vertical-rl',
+            textOrientation: 'mixed',
+            letterSpacing: '2px',
+            fontSize: '13px',
+            fontWeight: '700',
+            fontFamily: '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
+            transition: 'transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease',
         });
-        skipWrap.title = '鍙栨秷鍗犳湁褰撳墠璁㈠崟骞惰繘鍏ヤ笅涓€鍗?;
+        skipBtn.addEventListener('mouseenter', () => {
+            if (skipBtn.disabled) return;
+            skipBtn.style.filter = 'brightness(1.1)';
+            skipBtn.style.boxShadow = '0 12px 28px rgba(245,158,11,0.48), inset 0 1px 1px rgba(255,255,255,0.18)';
+        });
+        skipBtn.addEventListener('mouseleave', () => {
+            skipBtn.style.filter = 'brightness(1)';
+            skipBtn.style.boxShadow = '0 8px 24px rgba(245,158,11,0.34), inset 0 1px 1px rgba(255,255,255,0.18)';
+        });
+        skipBtn.addEventListener('click', () => sjSkipCurrentOrder(skipBtn));
 
-        ['璺?,'杩?,'姝?,'鍗?].forEach(ch => {
-            const sp = document.createElement('span');
-            sp.textContent = ch;
-            Object.assign(sp.style, { color:'#fff', fontSize:'12px', fontWeight:'700', lineHeight:'1.4', textShadow:'0 1px 2px rgba(0,0,0,.25)' });
-            skipWrap.appendChild(sp);
-        });
+        const syncSkipButtonPosition = () => {
+            const panelRect = panel.getBoundingClientRect();
+            const gap = 8;
+            const skipWidth = skipBtn.offsetWidth || 40;
+            const maxPanelLeft = Math.max(0, window.innerWidth - panelRect.width - skipWidth - gap);
+            if (panelRect.left > maxPanelLeft) {
+                panel.style.right = 'auto';
+                panel.style.transform = 'none';
+                panel.style.left = maxPanelLeft + 'px';
+            }
+            const updatedRect = panel.getBoundingClientRect();
+            skipBtn.style.right = 'auto';
+            skipBtn.style.bottom = 'auto';
+            skipBtn.style.transform = 'none';
+            skipBtn.style.left = Math.min(window.innerWidth - skipWidth, updatedRect.right + gap) + 'px';
+            skipBtn.style.top = updatedRect.top + 'px';
+            skipBtn.style.height = updatedRect.height + 'px';
+        };
 
-        skipWrap.addEventListener('mouseenter', () => {
-            skipWrap.style.transform = 'translateY(-50%) translateX(-2px)';
-            skipWrap.style.boxShadow = '0 12px 28px rgba(245,158,11,.45),inset 0 1px 1px rgba(255,255,255,.18)';
-            skipWrap.style.filter = 'brightness(1.1)';
-        });
-        skipWrap.addEventListener('mouseleave', () => {
-            skipWrap.style.transform = 'translateY(-50%)';
-            skipWrap.style.boxShadow = '0 8px 24px rgba(245,158,11,.3),inset 0 1px 1px rgba(255,255,255,.18)';
-            skipWrap.style.filter = 'brightness(1)';
-        });
-        skipWrap.addEventListener('mousedown', () => { skipWrap.style.transform='translateY(-50%) translateX(1px)'; skipWrap.style.filter='brightness(.9)'; });
-        skipWrap.addEventListener('mouseup',   () => { skipWrap.style.transform='translateY(-50%) translateX(-2px)'; skipWrap.style.filter='brightness(1.1)'; });
-        skipWrap.addEventListener('click', () => sjSkipCurrentOrder(skipWrap));
+        // ── 拖拽逻辑 ──
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let initialLeft = 0;
+        let initialTop = 0;
 
-        // 鈹€鈹€ 鎷栨嫿锛堜富闈㈡澘甯﹀姩璺宠繃鎸夐挳锛?鈹€鈹€
-        let isDragging=false, startX=0, startY=0, initL=0, initT=0;
         panel.addEventListener('mousedown', (e) => {
-            if (e.button !== 0 || e.target.closest('button')) return;
-            isDragging=false; startX=e.clientX; startY=e.clientY;
-            const r=panel.getBoundingClientRect(); initL=r.left; initT=r.top;
-            header.style.cursor='grabbing';
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
+            if (e.button !== 0) return;
+            if (e.target.closest('button')) return;
+            isDragging = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = panel.getBoundingClientRect();
+            initialLeft = rect.left;
+            initialTop = rect.top;
+            header.style.cursor = 'grabbing';
+            document.addEventListener('mousemove', onPanelMouseMove);
+            document.addEventListener('mouseup', onPanelMouseUp);
             e.preventDefault();
         });
-        const onMove = (e) => {
-            const dx=e.clientX-startX, dy=e.clientY-startY;
-            if (!isDragging && Math.hypot(dx,dy)>5) isDragging=true;
+
+        const onPanelMouseMove = (e) => {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            if (!isDragging && Math.sqrt(dx * dx + dy * dy) > 5) isDragging = true;
             if (!isDragging) return;
-            const r=panel.getBoundingClientRect();
-            const nl=Math.max(0,Math.min(initL+dx,window.innerWidth -r.width));
-            const nt=Math.max(0,Math.min(initT+dy,window.innerHeight-r.height));
-            panel.style.right=panel.style.bottom='auto'; panel.style.transform='none';
-            panel.style.left=nl+'px'; panel.style.top=nt+'px';
-            skipWrap.style.right=skipWrap.style.bottom='auto'; skipWrap.style.transform='none';
-            skipWrap.style.left=(nl-40)+'px'; skipWrap.style.top=nt+'px';
-            skipWrap.style.height=r.height+'px';
+            const rect = panel.getBoundingClientRect();
+            const skipSpace = (skipBtn.offsetWidth || 40) + 8;
+            const newLeft = Math.max(0, Math.min(initialLeft + dx, window.innerWidth - rect.width - skipSpace));
+            const newTop = Math.max(0, Math.min(initialTop + dy, window.innerHeight - rect.height));
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            panel.style.transform = 'none';
+            panel.style.left = newLeft + 'px';
+            panel.style.top = newTop + 'px';
+            syncSkipButtonPosition();
         };
-        const onUp = () => {
-            document.removeEventListener('mousemove',onMove);
-            document.removeEventListener('mouseup',onUp);
-            header.style.cursor='grab';
+
+        const onPanelMouseUp = () => {
+            document.removeEventListener('mousemove', onPanelMouseMove);
+            document.removeEventListener('mouseup', onPanelMouseUp);
+            header.style.cursor = 'grab';
             if (isDragging) {
-                const r=panel.getBoundingClientRect();
-                localStorage.setItem('sj_control_panel_x',Math.round(r.left));
-                localStorage.setItem('sj_control_panel_y',Math.round(r.top));
+                const rect = panel.getBoundingClientRect();
+                localStorage.setItem('sj_control_panel_x', Math.round(rect.left));
+                localStorage.setItem('sj_control_panel_y', Math.round(rect.top));
             }
         };
 
-        const sx=localStorage.getItem('sj_control_panel_x');
-        const sy=localStorage.getItem('sj_control_panel_y');
-        if (sx && sy) {
-            panel.style.right=panel.style.bottom='auto'; panel.style.transform='none';
-            panel.style.left=sx+'px'; panel.style.top=sy+'px';
-            skipWrap.style.right=skipWrap.style.bottom='auto'; skipWrap.style.transform='none';
-            skipWrap.style.left=(parseInt(sx)-40)+'px'; skipWrap.style.top=sy+'px';
+        const savedX = localStorage.getItem('sj_control_panel_x');
+        const savedY = localStorage.getItem('sj_control_panel_y');
+        if (savedX && savedY) {
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            panel.style.transform = 'none';
+            panel.style.left = savedX + 'px';
+            panel.style.top = savedY + 'px';
         }
 
-        document.body.appendChild(skipWrap);
         document.body.appendChild(panel);
-
-        requestAnimationFrame(() => {
-            const h=panel.getBoundingClientRect().height;
-            skipWrap.style.height=h+'px';
-            skipWrap.style.padding='0';
-        });
+        document.body.appendChild(skipBtn);
+        requestAnimationFrame(syncSkipButtonPosition);
     }
 
     function sjRecordingCreateOpenButton() {
@@ -2251,7 +2365,7 @@
         sjSkipRunning = true;
         if (button) {
             button.disabled = true;
-            button.innerHTML = '<span style="font-size:15px;margin-right:6px;">…</span>正在释放';
+            button.textContent = '… 正在释放';
         }
         const pending = {
             state: 'releasing',
@@ -2275,7 +2389,7 @@
             sjSkipRunning = false;
             if (button && button.isConnected) {
                 button.disabled = false;
-                button.innerHTML = '<span style="font-size:15px;margin-right:6px;">↷</span>跳过此单';
+                button.textContent = '⏭ 跳过此单';
             }
         }
     }
@@ -4206,6 +4320,8 @@
             if (openBtn) openBtn.remove();
             const controlPanel = document.getElementById('sj-control-panel');
             if (controlPanel) controlPanel.remove();
+            const skipBtn = document.getElementById('sj-skip-order-btn');
+            if (skipBtn) skipBtn.remove();
             sjRecordingAutoOpenOrderKey = '';
             sttCurrentOrderTranscripts = {};
             sttLastLocationHref = null;
