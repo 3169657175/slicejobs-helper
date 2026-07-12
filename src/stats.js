@@ -718,7 +718,15 @@
             }
         }
         const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
-        const isHomeOfficeMode = extraHours.filter(h => h !== 12).length > 0;
+        // 只有19点及以后有单子了才会触发在家办公模式
+        let todayHasLateAudits = false;
+        for (let h = 19; h < 24; h++) {
+            if (hourlyStats[h] > 0 || hourlyReworkStats[h] > 0) {
+                todayHasLateAudits = true;
+                break;
+            }
+        }
+        const isHomeOfficeMode = todayHasLateAudits;
         let totalFirst = 0;
         let totalRework = 0;
         let activeHours = 0;
@@ -1219,7 +1227,17 @@
             }
         }
         const displayHours = [...coreHours, ...extraHours].sort((a, b) => a - b);
-        const isWeeklyHomeOfficeMode = extraHours.filter(h => h !== 12).length > 0;
+        // 周维度：只有近7天有任何一天在19点及以后有单子才会触发
+        let weeklyHasLateAudits = false;
+        dateList.forEach(dateStr => {
+            const dayInfo = weeklyData[dateStr];
+            for (let h = 19; h < 24; h++) {
+                if (dayInfo.hourlyStats[h] > 0 || dayInfo.hourlyReworkStats[h] > 0) {
+                    weeklyHasLateAudits = true;
+                }
+            }
+        });
+        const isWeeklyHomeOfficeMode = weeklyHasLateAudits;
         let totalWeeklyFirst = 0;
         let totalWeeklyRework = 0;
         let totalWeeklyActiveHours = 0;
