@@ -1954,14 +1954,18 @@
             // 自动折叠非必须审核的题目卡片
             autoReviewCollapseUnneeded();
 
-            // 单槽预取：进入新订单后清空已消费槽，再补充且只补充一单。
+            // 单槽预取：进入新订单后清空已消费槽，启动极速重试探测预取且只补充一单。
             const match = location.pathname.match(/\/order\/review\/(\d+)/);
             if (match) {
                 const currentOrderId = match[1];
                 sjFinalizePrefetchSlotForCurrentOrder(currentOrderId);
-                const projectId = sjGetActiveProjectId();
-                if (projectId) {
-                    sjPrefetchNextOrder(currentOrderId, projectId);
+                if (typeof sjStartPrefetchWithRetry === 'function') {
+                    sjStartPrefetchWithRetry(currentOrderId);
+                } else {
+                    const projectId = sjGetActiveProjectId();
+                    if (projectId) {
+                        sjPrefetchNextOrder(currentOrderId, projectId);
+                    }
                 }
             }
 

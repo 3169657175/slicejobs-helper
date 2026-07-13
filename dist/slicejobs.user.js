@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      3.9.11
+// @version      3.9.12
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2161,6 +2161,30 @@
                 sjPrefetchV2InFlight = false;
                 sjReleasePrefetchLock(lockToken);
             });
+    }
+
+    let sjPrefetchAttemptedOrderId = '';
+
+    function sjStartPrefetchWithRetry(currentOrderId) {
+        currentOrderId = String(currentOrderId || '');
+        if (!currentOrderId || sjPrefetchAttemptedOrderId === currentOrderId) return;
+        sjPrefetchAttemptedOrderId = currentOrderId;
+
+        let retries = 30; // 30 * 100ms = 3s
+        const attempt = () => {
+            if (sjGetCurrentOrderId() !== currentOrderId) return;
+            if (sjReadPrefetchSlot() || sjPrefetchV2InFlight) return;
+            const projectId = sjGetActiveProjectId();
+            if (projectId) {
+                sjPrefetchNextOrder(currentOrderId, projectId);
+                return;
+            }
+            if (retries > 0) {
+                retries--;
+                setTimeout(attempt, 100);
+            }
+        };
+        attempt();
     }
 
     function sjArmPrefetchJump() {
@@ -4361,14 +4385,18 @@
             // 自动折叠非必须审核的题目卡片
             autoReviewCollapseUnneeded();
 
-            // 单槽预取：进入新订单后清空已消费槽，再补充且只补充一单。
+            // 单槽预取：进入新订单后清空已消费槽，启动极速重试探测预取且只补充一单。
             const match = location.pathname.match(/\/order\/review\/(\d+)/);
             if (match) {
                 const currentOrderId = match[1];
                 sjFinalizePrefetchSlotForCurrentOrder(currentOrderId);
-                const projectId = sjGetActiveProjectId();
-                if (projectId) {
-                    sjPrefetchNextOrder(currentOrderId, projectId);
+                if (typeof sjStartPrefetchWithRetry === 'function') {
+                    sjStartPrefetchWithRetry(currentOrderId);
+                } else {
+                    const projectId = sjGetActiveProjectId();
+                    if (projectId) {
+                        sjPrefetchNextOrder(currentOrderId, projectId);
+                    }
                 }
             }
 

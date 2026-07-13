@@ -1076,6 +1076,30 @@
             });
     }
 
+    let sjPrefetchAttemptedOrderId = '';
+
+    function sjStartPrefetchWithRetry(currentOrderId) {
+        currentOrderId = String(currentOrderId || '');
+        if (!currentOrderId || sjPrefetchAttemptedOrderId === currentOrderId) return;
+        sjPrefetchAttemptedOrderId = currentOrderId;
+
+        let retries = 30; // 30 * 100ms = 3s
+        const attempt = () => {
+            if (sjGetCurrentOrderId() !== currentOrderId) return;
+            if (sjReadPrefetchSlot() || sjPrefetchV2InFlight) return;
+            const projectId = sjGetActiveProjectId();
+            if (projectId) {
+                sjPrefetchNextOrder(currentOrderId, projectId);
+                return;
+            }
+            if (retries > 0) {
+                retries--;
+                setTimeout(attempt, 100);
+            }
+        };
+        attempt();
+    }
+
     function sjArmPrefetchJump() {
         const currentOrderId = sjGetCurrentOrderId();
         if (!currentOrderId || !sjHasReadyPrefetchSlot()) {
