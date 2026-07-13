@@ -33,6 +33,7 @@ const ORDER = [
     'hud.js',
     'auto-review.js',
     'image-optimizer.js',
+    'network-optimizer.js',
     'stt.js',
     'stats.js',
     'bootstrap.js',

@@ -1,3 +1,4 @@
+        sjInitNetworkOptimizer();
         sjInitImageOptimizer();
         init();
         startBackgroundRefresh();
