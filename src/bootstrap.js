@@ -1,4 +1,5 @@
-﻿        init();
+        sjInitImageOptimizer();
+        init();
         startBackgroundRefresh();
         setInterval(init, 2000);
     };
