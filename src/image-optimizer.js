@@ -124,43 +124,56 @@
     let sjViewerObserver = null;
     let sjBodyObserver = null;
 
+    function sjOptimizeSingleViewerImage(img) {
+        if (!img || img.tagName.toLowerCase() !== 'img') return;
+        if (!img.closest('.viewer-container')) return;
+
+        const src = img.getAttribute('src');
+        if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
+            // If a new source has been set by Viewer.js, reset original loaded state
+            const isNewLoad = !src.includes('quality,q_80');
+            if (isNewLoad) {
+                img.dataset.sjOriginalLoaded = 'false';
+                const btn = document.getElementById('sj-load-original-btn');
+                if (btn) {
+                    btn.innerText = '🔍 加载超清原图 (2MB)';
+                    btn.style.background = 'rgba(15, 23, 42, 0.75)';
+                    btn.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                    btn.disabled = false;
+                }
+            }
+
+            if (img.dataset.sjOriginalLoaded === 'true') {
+                return;
+            }
+
+            if (src.includes('format,webp') && src.includes('quality,q_80')) {
+                return;
+            }
+
+            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
+            if (optimizedSrc !== src) {
+                img.setAttribute('src', optimizedSrc);
+            }
+        }
+    }
+
     function sjInitImageOptimizer() {
         if (sjBodyObserver) return; // Prevent double init
 
         sjViewerObserver = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
                 if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
-                    const img = mutation.target;
-                    if (img.tagName.toLowerCase() === 'img' && img.closest('.viewer-container')) {
-                        const src = img.getAttribute('src');
-                        if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
-                            // If a new source has been set by Viewer.js, reset original loaded state
-                            const isNewLoad = !src.includes('quality,q_80');
-                            if (isNewLoad) {
-                                img.dataset.sjOriginalLoaded = 'false';
-                                const btn = document.getElementById('sj-load-original-btn');
-                                if (btn) {
-                                    btn.innerText = '🔍 加载超清原图 (2MB)';
-                                    btn.style.background = 'rgba(15, 23, 42, 0.75)';
-                                    btn.style.borderColor = 'rgba(255, 255, 255, 0.2)';
-                                    btn.disabled = false;
-                                }
-                            }
-
-                            if (img.dataset.sjOriginalLoaded === 'true') {
-                                return;
-                            }
-
-                            if (src.includes('format,webp') && src.includes('quality,q_80')) {
-                                return;
-                            }
-
-                            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
-                            if (optimizedSrc !== src) {
-                                img.setAttribute('src', optimizedSrc);
-                            }
+                    sjOptimizeSingleViewerImage(mutation.target);
+                } else if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType !== Node.ELEMENT_NODE) return;
+                        if (node.tagName.toLowerCase() === 'img') {
+                            sjOptimizeSingleViewerImage(node);
+                        } else {
+                            node.querySelectorAll('img').forEach(sjOptimizeSingleViewerImage);
                         }
-                    }
+                    });
                 }
             });
         });
@@ -172,6 +185,7 @@
 
                     if (node.classList.contains('viewer-container')) {
                         sjViewerObserver.observe(node, {
+                            childList: true,
                             attributes: true,
                             attributeFilter: ['src'],
                             subtree: true
@@ -192,6 +206,7 @@
         const existingViewer = document.querySelector('.viewer-container');
         if (existingViewer) {
             sjViewerObserver.observe(existingViewer, {
+                childList: true,
                 attributes: true,
                 attributeFilter: ['src'],
                 subtree: true
