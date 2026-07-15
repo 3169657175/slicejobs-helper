@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      4.2.2
+// @version      4.2.1
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -76,12 +76,7 @@
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
-                let responseText = '';
-                try {
-                    if (this.responseType === '' || this.responseType === 'text') {
-                        responseText = typeof this.responseText === 'string' ? this.responseText : '';
-                    }
-                } catch (e) {}
+                const responseText = typeof this.responseText === 'string' ? this.responseText : '';
                 scanText(responseText);
                 if (isAuditSubmitRequest(this._sjUrl, this._sjMethod)) {
                     notifyAuditSubmit({
@@ -2560,56 +2555,43 @@
     let sjViewerObserver = null;
     let sjBodyObserver = null;
 
-    function sjOptimizeSingleViewerImage(img) {
-        if (!img || img.tagName.toLowerCase() !== 'img') return;
-        if (!img.closest('.viewer-container')) return;
-
-        const src = img.getAttribute('src');
-        if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
-            // If a new source has been set by Viewer.js, reset original loaded state
-            const isNewLoad = !src.includes('quality,q_80');
-            if (isNewLoad) {
-                img.dataset.sjOriginalLoaded = 'false';
-                const btn = document.getElementById('sj-load-original-btn');
-                if (btn) {
-                    btn.innerText = '🔍 加载超清原图 (2MB)';
-                    btn.style.background = 'rgba(15, 23, 42, 0.75)';
-                    btn.style.borderColor = 'rgba(255, 255, 255, 0.2)';
-                    btn.disabled = false;
-                }
-            }
-
-            if (img.dataset.sjOriginalLoaded === 'true') {
-                return;
-            }
-
-            if (src.includes('format,webp') && src.includes('quality,q_80')) {
-                return;
-            }
-
-            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
-            if (optimizedSrc !== src) {
-                img.setAttribute('src', optimizedSrc);
-            }
-        }
-    }
-
     function sjInitImageOptimizer() {
         if (sjBodyObserver) return; // Prevent double init
 
         sjViewerObserver = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
                 if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
-                    sjOptimizeSingleViewerImage(mutation.target);
-                } else if (mutation.type === 'childList') {
-                    mutation.addedNodes.forEach((node) => {
-                        if (node.nodeType !== Node.ELEMENT_NODE) return;
-                        if (node.tagName.toLowerCase() === 'img') {
-                            sjOptimizeSingleViewerImage(node);
-                        } else {
-                            node.querySelectorAll('img').forEach(sjOptimizeSingleViewerImage);
+                    const img = mutation.target;
+                    if (img.tagName.toLowerCase() === 'img' && img.closest('.viewer-container')) {
+                        const src = img.getAttribute('src');
+                        if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
+                            // If a new source has been set by Viewer.js, reset original loaded state
+                            const isNewLoad = !src.includes('quality,q_80');
+                            if (isNewLoad) {
+                                img.dataset.sjOriginalLoaded = 'false';
+                                const btn = document.getElementById('sj-load-original-btn');
+                                if (btn) {
+                                    btn.innerText = '🔍 加载超清原图 (2MB)';
+                                    btn.style.background = 'rgba(15, 23, 42, 0.75)';
+                                    btn.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                                    btn.disabled = false;
+                                }
+                            }
+
+                            if (img.dataset.sjOriginalLoaded === 'true') {
+                                return;
+                            }
+
+                            if (src.includes('format,webp') && src.includes('quality,q_80')) {
+                                return;
+                            }
+
+                            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
+                            if (optimizedSrc !== src) {
+                                img.setAttribute('src', optimizedSrc);
+                            }
                         }
-                    });
+                    }
                 }
             });
         });
@@ -2621,7 +2603,6 @@
 
                     if (node.classList.contains('viewer-container')) {
                         sjViewerObserver.observe(node, {
-                            childList: true,
                             attributes: true,
                             attributeFilter: ['src'],
                             subtree: true
@@ -2642,7 +2623,6 @@
         const existingViewer = document.querySelector('.viewer-container');
         if (existingViewer) {
             sjViewerObserver.observe(existingViewer, {
-                childList: true,
                 attributes: true,
                 attributeFilter: ['src'],
                 subtree: true

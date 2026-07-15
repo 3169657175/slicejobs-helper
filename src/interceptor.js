@@ -55,12 +55,7 @@
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
-                let responseText = '';
-                try {
-                    if (this.responseType === '' || this.responseType === 'text') {
-                        responseText = typeof this.responseText === 'string' ? this.responseText : '';
-                    }
-                } catch (e) {}
+                const responseText = typeof this.responseText === 'string' ? this.responseText : '';
                 scanText(responseText);
                 if (isAuditSubmitRequest(this._sjUrl, this._sjMethod)) {
                     notifyAuditSubmit({
