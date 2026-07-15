@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         爱零工审单数据助手 (SliceJobs Audit Stats Helper)
 // @namespace    http://tampermonkey.net/
-// @version      4.2.0
+// @version      4.2.1
 // @description  统计每日及每小时审核订单量，支持日期切换。内置一键通过审核助手（Alt+A）与AI语音重识别字幕（SenseVoice）。
 // @author       Antigravity
 // @match        *://admin2.slicejobs.com/*
@@ -2433,7 +2433,7 @@
     // Aliyun OSS Image Optimizer (v4.1.0)
     // =========================================================================
 
-    function sjOptimizeImageUrlForPreview(url, width = 1200) {
+    function sjOptimizeImageUrlForPreview(url, width = 1000) {
         if (!url || typeof url !== 'string') return url;
         if (!url.includes('slicejobs.com') && !url.includes('aliyuncs.com')) return url;
         if (url.startsWith('data:') || url.startsWith('blob:')) return url;
@@ -2446,23 +2446,25 @@
                     // Replace existing resize settings to use our optimized width
                     let newProcess = process.replace(/w_\d+/g, `w_${width}`).replace(/h_\d+/g, '');
                     newProcess = newProcess.replace(/,+/g, ',').replace(/,$/, '').replace(/,color_[0-9a-fA-F]+/, '').replace(/m_pad/, 'm_lfit');
+                    if (!newProcess.includes('/format,webp')) newProcess += '/format,webp';
+                    if (!newProcess.includes('/quality,q_80')) newProcess += '/quality,q_80';
                     u.searchParams.set('x-oss-process', newProcess);
                 } else {
-                    u.searchParams.set('x-oss-process', `image/resize,w_${width}`);
+                    u.searchParams.set('x-oss-process', `image/resize,w_${width}/format,webp/quality,q_80`);
                 }
             } else {
-                u.searchParams.set('x-oss-process', `image/resize,w_${width}`);
+                u.searchParams.set('x-oss-process', `image/resize,w_${width}/format,webp/quality,q_80`);
             }
             return u.toString();
         } catch (e) {
             if (url.includes('?')) {
                 if (url.includes('x-oss-process=')) {
-                    return url.replace(/x-oss-process=[^&]+/, `x-oss-process=image/resize,w_${width}`);
+                    return url.replace(/x-oss-process=[^&]+/, `x-oss-process=image/resize,w_${width}/format,webp/quality,q_80`);
                 } else {
-                    return url + `&x-oss-process=image/resize,w_${width}`;
+                    return url + `&x-oss-process=image/resize,w_${width}/format,webp/quality,q_80`;
                 }
             } else {
-                return url + `?x-oss-process=image/resize,w_${width}`;
+                return url + `?x-oss-process=image/resize,w_${width}/format,webp/quality,q_80`;
             }
         }
     }
@@ -2484,9 +2486,9 @@
             const src = img.getAttribute('src');
             if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
                 if (img.dataset.sjOriginalLoaded === 'true') return;
-                if (src.includes('x-oss-process=image/resize,w_1200') || src.includes('x-oss-process=image/resize,w_1500')) return;
+                if (src.includes('format,webp') && src.includes('quality,q_80')) return;
                 
-                const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1200);
+                const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
                 if (optimizedSrc !== src) {
                     img.setAttribute('src', optimizedSrc);
                 }
@@ -2564,7 +2566,7 @@
                         const src = img.getAttribute('src');
                         if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
                             // If a new source has been set by Viewer.js, reset original loaded state
-                            const isNewLoad = !src.includes('x-oss-process=image/resize,w_1200');
+                            const isNewLoad = !src.includes('quality,q_80');
                             if (isNewLoad) {
                                 img.dataset.sjOriginalLoaded = 'false';
                                 const btn = document.getElementById('sj-load-original-btn');
@@ -2580,11 +2582,11 @@
                                 return;
                             }
 
-                            if (src.includes('x-oss-process=image/resize,w_1200') || src.includes('x-oss-process=image/resize,w_1500')) {
+                            if (src.includes('format,webp') && src.includes('quality,q_80')) {
                                 return;
                             }
 
-                            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1200);
+                            const optimizedSrc = sjOptimizeImageUrlForPreview(src, 1000);
                             if (optimizedSrc !== src) {
                                 img.setAttribute('src', optimizedSrc);
                             }
